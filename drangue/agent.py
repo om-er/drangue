@@ -140,7 +140,7 @@ class Agent:
                 yield Event(type="tool_result", name=call.name, result=out)
                 results.append(ToolResult(id=call.id, content=out))
 
-            history.append(self.model.tool_result_message(results))
+            history.extend(self.model.tool_result_message(results))
 
         text = f"(stopped: reached max_steps={self.max_steps})"
         yield Event(type="final", text=text)

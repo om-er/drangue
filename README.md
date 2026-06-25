@@ -7,14 +7,11 @@ chains, no base classes to inherit. You can read the whole loop in one sitting.
 
 ## Install
 
-```bash
-pip install drangue
-```
-
-Set your key:
+The core has zero dependencies. Install the adapter for the backend you want:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-...
+pip install "drangue[openai]"     # OpenAI, DeepSeek, Groq, Ollama, and more
+pip install "drangue[anthropic]"  # Claude
 ```
 
 ## The whole thing
@@ -68,20 +65,43 @@ for event in agent.stream("What is the weather in Tokyo?"):
         print(event.text)
 ```
 
-## Bring your own model
+## Cheap and local models
 
-`model` can be a string (the default Anthropic adapter) or any object with a
-`generate` method. That seam is how you swap providers, add caching, or pass a
-fake model in tests. See `tests/test_agent.py` for a fully offline example.
+`drangue` ships two adapters. One of them, `OpenAIModel`, talks to any
+OpenAI-compatible endpoint, which is most of the cheap and free backends. You
+choose the backend with `base_url`; the agent loop does not change.
 
 ```python
-from drangue import AnthropicModel
+from drangue import Agent, OpenAIModel
 
+# Free and local. Install Ollama, run `ollama pull llama3.1`. No API key, no per-token cost.
 agent = Agent(
-    model=AnthropicModel("claude-opus-4-8", max_tokens=8192),
+    model=OpenAIModel("llama3.1", base_url="http://localhost:11434/v1", api_key="ollama"),
     tools=[get_weather],
 )
 ```
+
+Swap the model line for a cheap hosted backend without touching anything else:
+
+| Backend | How |
+| --- | --- |
+| Ollama / LM Studio | `OpenAIModel("llama3.1", base_url="http://localhost:11434/v1", api_key="ollama")` (free, local) |
+| DeepSeek | `OpenAIModel("deepseek-chat", base_url="https://api.deepseek.com")` |
+| Groq | `OpenAIModel("llama-3.1-8b-instant", base_url="https://api.groq.com/openai/v1")` |
+| OpenRouter | `OpenAIModel("...", base_url="https://openrouter.ai/api/v1")` |
+| OpenAI | `OpenAIModel("gpt-4o-mini")` |
+| Claude | `"claude-opus-4-8"` or `AnthropicModel("claude-opus-4-8")` |
+
+`api_key` and `base_url` fall back to the `OPENAI_API_KEY` and
+`OPENAI_BASE_URL` environment variables when omitted. See `examples/cheap.py`.
+
+## Bring your own model
+
+`model` can be a string (the default Anthropic adapter), one of the adapters
+above, or any object with a `generate` method. That seam is how you swap
+providers, add caching, or pass a fake model in tests. The OpenAI and Anthropic
+adapters are both tested fully offline against fake clients, see
+`tests/test_openai_model.py`.
 
 ## What drangue does not do
 
