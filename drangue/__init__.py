@@ -1,32 +1,32 @@
 """drangue: a tiny, obvious agent runtime for Python.
 
-An agent is just a model plus tools. Running it is one call.
-No graphs, no chains, no base classes to inherit.
+The simple path is one object and one call. Underneath, runs are driven as an
+event-sourced loop (orchestrator decides, executor acts, store records) so the
+same facade grows into durability, observability, and recovery without changing.
 """
 
-from .agent import Agent, Event, Result
-from .models import (
-    AnthropicModel,
-    Model,
-    ModelResponse,
-    OpenAIModel,
-    ToolCall,
-    ToolResult,
-)
+from .agent import Agent
+from .engine import Engine, EventSourcedEngine
+from .events import Event, Result
+from .models import AnthropicModel, Model, ModelResponse, OpenAIModel, ToolCall
+from .store import InMemoryStore, Store
 from .tool import Tool, tool
 
 __all__ = [
     "Agent",
-    "Event",
-    "Result",
     "tool",
     "Tool",
+    "Event",
+    "Result",
     "Model",
     "AnthropicModel",
     "OpenAIModel",
     "ModelResponse",
     "ToolCall",
-    "ToolResult",
+    "Store",
+    "InMemoryStore",
+    "Engine",
+    "EventSourcedEngine",
 ]
 
 __version__ = "0.0.1"

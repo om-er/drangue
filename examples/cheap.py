@@ -30,5 +30,5 @@ agent = Agent(
 )
 
 if __name__ == "__main__":
-    result = agent.run("What should I wear in Paris today?", trace=True)
+    result = agent.run_sync("What should I wear in Paris today?", trace=True)
     print("FINAL:", result.output)

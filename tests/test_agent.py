@@ -1,4 +1,8 @@
-"""Offline tests. They use a scripted model, so no network or API key needed."""
+"""Offline tests for the agent loop. A scripted model means no network/API key.
+
+Tests are async; run them with `python run_tests.py` (no pytest needed) or with
+pytest if you have pytest-asyncio.
+"""
 
 from drangue import Agent, ModelResponse, ToolCall, tool
 from drangue.models import Model
@@ -16,35 +20,22 @@ class ScriptedModel(Model):
     def __init__(self, steps):
         self.steps = steps
         self.i = 0
-        self.seen_tools = None
+        self.calls = 0
 
-    def generate(self, *, system, messages, tools):
-        self.seen_tools = tools
+    async def generate(self, *, system, messages, tools):
+        self.calls += 1
         resp = self.steps[self.i]
         self.i += 1
         return resp
 
 
-def _tool_use_msg(call):
-    return {"role": "assistant", "content": [
-        {"type": "tool_use", "id": call.id, "name": call.name, "input": call.arguments}
-    ]}
-
-
-def _text_msg(text):
-    return {"role": "assistant", "content": [{"type": "text", "text": text}]}
-
-
-def test_tool_loop_runs_tool_then_answers():
-    call = ToolCall(id="t1", name="add", arguments={"a": 2, "b": 3})
+async def test_tool_loop_runs_tool_then_answers():
     model = ScriptedModel([
-        ModelResponse(tool_calls=[call], assistant_message=_tool_use_msg(call)),
-        ModelResponse(text="The answer is 5.",
-                      assistant_message=_text_msg("The answer is 5.")),
+        ModelResponse(tool_calls=[ToolCall("t1", "add", {"a": 2, "b": 3})]),
+        ModelResponse(text="The answer is 5."),
     ])
-
     agent = Agent(model=model, tools=[add])
-    result = agent.run("what is 2 + 3?")
+    result = await agent.run("what is 2 + 3?")
 
     assert result.output == "The answer is 5."
     assert result.steps == 2
@@ -59,26 +50,47 @@ def test_schema_is_generated_from_signature():
     assert set(schema["input_schema"]["required"]) == {"a", "b"}
 
 
-def test_unknown_tool_is_reported_not_raised():
-    bad = ToolCall(id="x", name="nope", arguments={})
+async def test_unknown_tool_is_reported_not_raised():
+    bad = ToolCall("x", "nope", {})
     model = ScriptedModel([
-        ModelResponse(tool_calls=[bad], assistant_message=_tool_use_msg(bad)),
-        ModelResponse(text="done", assistant_message=_text_msg("done")),
+        ModelResponse(tool_calls=[bad]),
+        ModelResponse(text="done"),
     ])
     agent = Agent(model=model, tools=[add])
-    result = agent.run("go")
+    result = await agent.run("go")
     assert result.output == "done"
 
 
-def test_stream_yields_events():
-    call = ToolCall(id="t1", name="add", arguments={"a": 1, "b": 1})
+async def test_stream_yields_events():
+    call = ToolCall("t1", "add", {"a": 1, "b": 1})
     model = ScriptedModel([
-        ModelResponse(tool_calls=[call], assistant_message=_tool_use_msg(call)),
-        ModelResponse(text="two", assistant_message=_text_msg("two")),
+        ModelResponse(tool_calls=[call]),
+        ModelResponse(text="two"),
     ])
     agent = Agent(model=model, tools=[add])
-    types = [e.type for e in agent.stream("go")]
-    assert types == ["model", "tool_call", "tool_result", "model", "final"]
+    types = [e.type async for e in agent.stream("go")]
+    assert types == [
+        "run_started", "model_decision", "tool_result",
+        "model_decision", "run_finished",
+    ]
+
+
+async def test_async_tool_is_awaited():
+    async def fetch(city: str) -> str:
+        """Fetch something asynchronously."""
+        return f"data for {city}"
+
+    call = ToolCall("t1", "fetch", {"city": "Paris"})
+    model = ScriptedModel([
+        ModelResponse(tool_calls=[call]),
+        ModelResponse(text="done"),
+    ])
+    agent = Agent(model=model, tools=[fetch])
+    result = await agent.run("go")
+    assert result.output == "done"
+    # The tool result is recorded in the log.
+    tool_results = [e for e in result.events if e.type == "tool_result"]
+    assert tool_results[0].payload["content"] == "data for Paris"
 
 
 def test_plain_function_is_accepted_as_tool():
