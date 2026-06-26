@@ -207,7 +207,7 @@ coherent.
 
 ---
 
-## Phase 3: Tool hardening
+## Phase 3: Tool hardening  (done)
 
 **Goal.** Every integration is bounded and returns structured outcomes, never raw
 exceptions or plausible garbage. (Ch6)

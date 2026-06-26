@@ -10,6 +10,8 @@ import inspect
 import typing as t
 from dataclasses import dataclass
 
+from .hardening import ToolPolicy, _UNSET, make_policy
+
 _PY_TO_JSON = {
     str: "string",
     int: "integer",
@@ -56,6 +58,7 @@ class Tool:
     parameters: dict
     func: t.Callable
     wants_idempotency_key: bool = False
+    policy: ToolPolicy | None = None
 
     def to_schema(self) -> dict:
         """Return the tool definition in the shape the model API expects."""
@@ -70,7 +73,9 @@ class Tool:
 
 
 def tool(func: t.Callable | None = None, *, name: str | None = None,
-         description: str | None = None):
+         description: str | None = None, timeout: float | None = None,
+         retries: int = 0, backoff: float = 0.0, max_backoff: float = 30.0,
+         retry_on=None, validate=None, fallback=_UNSET):
     """Decorate a function to expose it as a tool.
 
     Usage:
@@ -81,7 +86,19 @@ def tool(func: t.Callable | None = None, *, name: str | None = None,
 
     The function name becomes the tool name and the docstring becomes the
     description, unless you override them.
+
+    Hardening options (Chapter 6), all optional:
+        timeout     seconds before the call is abandoned (a retryable timeout)
+        retries     extra attempts after the first, for transient failures
+        backoff     base seconds for exponential backoff between retries
+        retry_on    extra exception types to treat as transient
+        validate    a callable run on the result; raise ValidationError to reject
+        fallback    a value (or callable) returned, marked degraded, on failure
     """
+
+    policy = make_policy(timeout=timeout, retries=retries, backoff=backoff,
+                         max_backoff=max_backoff, retry_on=retry_on,
+                         validate=validate, fallback=fallback)
 
     def wrap(fn: t.Callable) -> Tool:
         sig = inspect.signature(fn)
@@ -114,8 +131,19 @@ def tool(func: t.Callable | None = None, *, name: str | None = None,
             parameters=parameters,
             func=fn,
             wants_idempotency_key="idempotency_key" in sig.parameters,
+            policy=policy,
         )
 
     if func is not None:
         return wrap(func)
     return wrap
+
+
+def harden(obj, **policy_kwargs) -> Tool:
+    """Attach (or replace) a hardening policy on an existing tool or function.
+
+        flaky = harden(flaky, timeout=2.0, retries=3, backoff=0.5)
+    """
+    t_obj = obj if isinstance(obj, Tool) else tool(obj)
+    t_obj.policy = make_policy(**policy_kwargs)
+    return t_obj

@@ -75,6 +75,33 @@ async for event in agent.stream("What is the weather in Tokyo?"):
         print(event.payload["output"])
 ```
 
+## Resilient tools
+
+Tools are bounded by default and never crash a run: an exception comes back to
+the model as a clean, structured failure it can reason about. Opt into more with
+options on `@tool`:
+
+```python
+from drangue import tool, RateLimitError
+
+@tool(timeout=5.0, retries=3, backoff=0.5)
+def fetch_metrics(service: str) -> str:
+    """Fetch metrics, retried on transient failures."""
+    resp = http_get(service)
+    if resp.status == 429:
+        raise RateLimitError(retry_after=resp.headers["Retry-After"])  # retried, honoring the hint
+    return resp.text
+```
+
+The wrapper applies, in order: timeout, classify the failure, retry transient
+ones with exponential backoff (reusing the idempotency key), validate the
+result, then return a clean failure or a marked-degraded `fallback`. The model
+receives, for example:
+
+```json
+{"ok": false, "tool": "fetch_metrics", "error": {"category": "timeout", "message": "timeout"}}
+```
+
 ## Durable runs
 
 Point an Agent at a durable store and give a run a stable `run_id`. If the
@@ -165,8 +192,12 @@ The current focus is the production core (`ROADMAP.md`):
   OpenTelemetry tracers, reasoning capture).
 - Done: durable resume after a crash (SQLite store, replay, idempotency keys,
   the three state scopes).
-- Next: hardened tool calls (timeouts, retries, schema validation, clean
-  failure), then cost budgets, guardrails, and human-in-the-loop.
+- Done: hardened tool calls (timeouts, retries with backoff, schema validation,
+  clean structured failures, fallbacks).
+- Next (later phases): cost budgets, security and guardrails, and
+  human-in-the-loop rollout.
+
+The production core (Phases 0 to 3) is complete.
 
 ## Develop
 

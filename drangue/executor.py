@@ -13,12 +13,10 @@ retries reuse it so a side effect runs exactly once across a crash.
 
 from __future__ import annotations
 
-import asyncio
-import inspect
-import json
 import time
 
 from .events import Event
+from .hardening import run_tool, unknown_tool_error
 from .orchestrator import ModelStep, ToolStep
 
 
@@ -82,18 +80,13 @@ class Executor:
     async def _dispatch(self, call, idempotency_key: str) -> str:
         tool = self.tools.get(call.name)
         if tool is None:
-            return f"Error: unknown tool '{call.name}'"
+            return unknown_tool_error(call.name)
         kwargs = dict(call.arguments)
         if tool.wants_idempotency_key:
             # A stable key derived from durable facts (run_id, seq). A tool that
             # declares it can pass it downstream to deduplicate side effects.
+            # The same kwargs are reused across retries, so the key is stable.
             kwargs["idempotency_key"] = idempotency_key
-        try:
-            if inspect.iscoroutinefunction(tool.func):
-                result = await tool.func(**kwargs)
-            else:
-                # Run sync tools off the event loop so they cannot block it.
-                result = await asyncio.to_thread(tool.func, **kwargs)
-        except Exception as exc:  # clean failure over a crashed run
-            return f"Error: {exc}"
-        return result if isinstance(result, str) else json.dumps(result, default=str)
+        # run_tool applies the tool's policy: timeout, retry, validate, and turns
+        # any failure into a clean, structured result the model can reason about.
+        return await run_tool(tool, kwargs)

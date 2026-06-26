@@ -7,17 +7,34 @@ same facade grows into durability, observability, and recovery without changing.
 
 from .agent import Agent
 from .engine import Engine, EventSourcedEngine
+from .errors import (
+    AuthError,
+    PermanentError,
+    RateLimitError,
+    ToolError,
+    TransientError,
+    ValidationError,
+)
 from .events import Event, Result, Span
+from .hardening import ToolPolicy
 from .memory import Memory, MemoryItem, NullMemory
 from .models import AnthropicModel, Model, ModelResponse, OpenAIModel, ToolCall
 from .observability import ConsoleTracer, NullTracer, OTelTracer, Tracer
 from .store import InMemoryStore, SQLiteStore, Store
-from .tool import Tool, tool
+from .tool import Tool, harden, tool
 
 __all__ = [
     "Agent",
     "tool",
     "Tool",
+    "harden",
+    "ToolPolicy",
+    "ToolError",
+    "TransientError",
+    "PermanentError",
+    "AuthError",
+    "RateLimitError",
+    "ValidationError",
     "Event",
     "Result",
     "Span",
