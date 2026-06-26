@@ -21,15 +21,11 @@ from .engine import EventSourcedEngine
 from .events import Event, Result
 from .executor import Executor
 from .models import AnthropicModel
+from .observability import ConsoleTracer, NullTracer
 from .orchestrator import Orchestrator
 from .store import InMemoryStore
 from .tool import Tool
 from .tool import tool as make_tool
-
-_DIM = "\033[2m"
-_BLUE = "\033[34m"
-_GREEN = "\033[32m"
-_RESET = "\033[0m"
 
 
 def _resolve_model(model: t.Any, max_tokens: int):
@@ -50,33 +46,12 @@ def _new_run_id() -> str:
     return uuid.uuid4().hex
 
 
-def _make_console_emit():
-    """An emit callback that prints a readable trace, like the old trace flag."""
-
-    async def emit(ev: Event) -> None:
-        if ev.type == "model_decision":
-            text = ev.payload.get("text", "")
-            if text.strip():
-                print(f"{_BLUE}*{_RESET} model  {text}")
-            for c in ev.payload.get("tool_calls", []):
-                args = ", ".join(f"{k}={v!r}" for k, v in c["arguments"].items())
-                print(f"{_GREEN}*{_RESET} tool   {c['name']}({args})")
-        elif ev.type == "tool_result":
-            content = ev.payload.get("content", "")
-            preview = content if len(content) <= 200 else content[:200] + "..."
-            print(f"{_DIM}       -> {preview}{_RESET}")
-        elif ev.type == "run_finished":
-            print()
-
-    return emit
-
-
 class Agent:
     """A model plus tools. Call `run` / `stream` (async) or `run_sync`."""
 
     def __init__(self, model: t.Any, tools: list | None = None,
                  instructions: str = "", *, max_steps: int = 20,
-                 max_tokens: int = 4096, store=None, engine=None):
+                 max_tokens: int = 4096, store=None, engine=None, tracer=None):
         self.model = _resolve_model(model, max_tokens)
         self.tools: dict[str, Tool] = {}
         for obj in tools or []:
@@ -85,23 +60,28 @@ class Agent:
         self.instructions = instructions
         self.store = store or InMemoryStore()
         self.engine = engine or EventSourcedEngine()
+        self.tracer = tracer or NullTracer()
         self.orchestrator = Orchestrator(max_steps=max_steps)
         self.executor = Executor(self.model, self.tools)
+
+    def _tracer_for(self, trace: bool):
+        return ConsoleTracer() if trace else self.tracer
 
     async def run(self, input: str, *, run_id: str | None = None,
                   trace: bool = False) -> Result:
         """Run to completion. Pass an existing run_id to resume (Phase 2)."""
         rid = run_id or _new_run_id()
-        emit = _make_console_emit() if trace else None
         return await self.engine.run(
             run_id=rid, orchestrator=self.orchestrator, executor=self.executor,
-            store=self.store, system=self.instructions, input=input, emit=emit,
+            store=self.store, system=self.instructions, input=input,
+            tracer=self._tracer_for(trace),
         )
 
-    async def stream(self, input: str, *, run_id: str | None = None
-                     ) -> t.AsyncIterator[Event]:
+    async def stream(self, input: str, *, run_id: str | None = None,
+                     trace: bool = False) -> t.AsyncIterator[Event]:
         """Yield each Event as it is appended to the log."""
         rid = run_id or _new_run_id()
+        tracer = self._tracer_for(trace)
         queue: asyncio.Queue = asyncio.Queue()
         sentinel = object()
 
@@ -114,6 +94,7 @@ class Agent:
                     run_id=rid, orchestrator=self.orchestrator,
                     executor=self.executor, store=self.store,
                     system=self.instructions, input=input, emit=emit,
+                    tracer=tracer,
                 )
             finally:
                 await queue.put(sentinel)

@@ -7,8 +7,9 @@ same facade grows into durability, observability, and recovery without changing.
 
 from .agent import Agent
 from .engine import Engine, EventSourcedEngine
-from .events import Event, Result
+from .events import Event, Result, Span
 from .models import AnthropicModel, Model, ModelResponse, OpenAIModel, ToolCall
+from .observability import ConsoleTracer, NullTracer, OTelTracer, Tracer
 from .store import InMemoryStore, Store
 from .tool import Tool, tool
 
@@ -18,6 +19,7 @@ __all__ = [
     "Tool",
     "Event",
     "Result",
+    "Span",
     "Model",
     "AnthropicModel",
     "OpenAIModel",
@@ -27,6 +29,10 @@ __all__ = [
     "InMemoryStore",
     "Engine",
     "EventSourcedEngine",
+    "Tracer",
+    "NullTracer",
+    "ConsoleTracer",
+    "OTelTracer",
 ]
 
 __version__ = "0.0.1"

@@ -132,7 +132,7 @@ requires determinism.
 
 ---
 
-## Phase 0: The split, the log, and async
+## Phase 0: The split, the log, and async  (done)
 
 **Goal.** Re-architect today's fused loop into orchestrator plus executor with an
 event log, and move the whole stack to async. No new production behavior yet;
@@ -157,7 +157,7 @@ real event log, fully async, and the public facade is unchanged in spirit.
 
 ---
 
-## Phase 1: Observability
+## Phase 1: Observability  (done)
 
 **Goal.** Make a run fully reconstructable from the outside, with cost and
 timing. This is the substrate the rest of the book stands on. (Ch9)

@@ -35,6 +35,7 @@ class ModelResponse:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: dict | None = None
+    reasoning: str | None = None    # the model's stated intent, when available
     stop_reason: str | None = None
 
 
@@ -118,10 +119,13 @@ class AnthropicModel(Model):
         resp = await self.client.messages.create(**params)
 
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         for block in resp.content:
             if block.type == "text":
                 text_parts.append(block.text)
+            elif block.type == "thinking":
+                reasoning_parts.append(getattr(block, "thinking", ""))
             elif block.type == "tool_use":
                 tool_calls.append(
                     ToolCall(id=block.id, name=block.name, arguments=block.input)
@@ -134,6 +138,7 @@ class AnthropicModel(Model):
             text="".join(text_parts),
             tool_calls=tool_calls,
             usage=usage,
+            reasoning="".join(reasoning_parts) or None,
             stop_reason=resp.stop_reason,
         )
 

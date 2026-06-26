@@ -19,6 +19,7 @@ dependencies = []
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.0"]
+otel = ["opentelemetry-api>=1.20", "opentelemetry-sdk>=1.20"]
 dev = ["pytest>=7", "anthropic>=0.40", "openai>=1.0"]
 
 [project.urls]

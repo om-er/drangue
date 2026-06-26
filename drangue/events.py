@@ -5,9 +5,13 @@ that sequence (see orchestrator.fold). Keeping the log as plain, JSON-shaped
 records is deliberate: in Phase 2 the same records persist to a durable store
 and a resumed run replays them to reconstruct state exactly.
 
-Event types in Phase 0:
+Each executed step also carries timing (`ts`, `duration_ms`), recorded by the
+executor as a fact. Because timing lives in the log, a run is fully
+reconstructable from the outside: see `Result.trace`.
+
+Event types:
     run_started     payload: {input}
-    model_decision  payload: {text, tool_calls: [{id, name, arguments}], usage}
+    model_decision  payload: {text, tool_calls, usage, reasoning}
     tool_result     payload: {call_id, name, content}
     run_finished    payload: {output}
 """
@@ -19,10 +23,30 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Event:
-    seq: int                      # position in the run's log; basis for idempotency
+    seq: int                          # position in the log; basis for idempotency
     type: str
     payload: dict = field(default_factory=dict)
-    ts: str | None = None         # recorded as a fact by the executor (Phase 1)
+    ts: float | None = None           # wall-clock start, recorded by the executor
+    duration_ms: float | None = None  # how long the step took
+
+
+@dataclass
+class Span:
+    """A node in a run's trace tree. Built from the log, no tracer required."""
+
+    name: str
+    attrs: dict = field(default_factory=dict)
+    children: list = field(default_factory=list)
+    ts: float | None = None
+    duration_ms: float | None = None
+
+    def render(self, indent: int = 0) -> str:
+        pad = "  " * indent
+        dur = f"  {self.duration_ms:.1f}ms" if self.duration_ms is not None else ""
+        lines = [f"{pad}{self.name}{dur}"]
+        for child in self.children:
+            lines.append(child.render(indent + 1))
+        return "\n".join(lines)
 
 
 @dataclass
@@ -40,7 +64,7 @@ class Result:
 
     @property
     def usage(self) -> dict:
-        """Total token usage across the run (populated once adapters report it)."""
+        """Total token usage across the run."""
         inp = out = 0
         for e in self.events:
             u = e.payload.get("usage") if e.type == "model_decision" else None
@@ -48,3 +72,26 @@ class Result:
                 inp += u.get("input_tokens", 0)
                 out += u.get("output_tokens", 0)
         return {"input_tokens": inp, "output_tokens": out}
+
+    @property
+    def latency_ms(self) -> float:
+        """Total time spent in model and tool steps."""
+        return sum(e.duration_ms or 0.0 for e in self.events)
+
+    @property
+    def trace(self) -> Span:
+        """A navigable span tree reconstructed from the persisted log.
+
+        This is the canonical, source-of-truth trace: it needs no tracer to be
+        configured and is always faithful to what actually ran.
+        """
+        root = Span(name="run", attrs={"output": self.output},
+                    duration_ms=self.latency_ms)
+        for e in self.events:
+            if e.type == "model_decision":
+                root.children.append(Span(name="model", attrs=dict(e.payload),
+                                          ts=e.ts, duration_ms=e.duration_ms))
+            elif e.type == "tool_result":
+                root.children.append(Span(name="tool", attrs=dict(e.payload),
+                                          ts=e.ts, duration_ms=e.duration_ms))
+        return root

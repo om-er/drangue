@@ -135,9 +135,11 @@ recovery layer on without changing the facade. See `ROADMAP.md`.
 
 The current focus is the production core (`ROADMAP.md`):
 
-- Done: orchestrator/executor split, event log, async core, token capture.
-- Next: persistent traces (spans, cost, timing), then durable resume after a
-  crash, then hardened tool calls (timeouts, retries, validation).
+- Done: orchestrator/executor split, event log, async core.
+- Done: observability (per-step timing and cost, a trace tree, console and
+  OpenTelemetry tracers, reasoning capture).
+- Next: durable resume after a crash (SQLite store, replay, idempotency), then
+  hardened tool calls (timeouts, retries, validation).
 
 ## Develop
 
