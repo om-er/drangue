@@ -79,6 +79,15 @@ async def test_system_prompt_becomes_a_system_message():
     assert first == {"role": "system", "content": "Be brief."}
 
 
+async def test_idempotency_key_is_sent_as_a_header():
+    client = FakeOpenAIClient([_resp(content="ok")])
+    model = OpenAIModel("test", client=client)
+    await model.generate(system="", messages=[{"role": "user", "content": "hi"}],
+                         tools=[], idempotency_key="run-1:1")
+
+    assert client.calls[0]["extra_headers"]["Idempotency-Key"] == "run-1:1"
+
+
 async def test_tool_results_use_the_tool_role_keyed_by_call_id():
     client = FakeOpenAIClient([
         _resp(tool_calls=[_tc("c1", "add", '{"a": 1, "b": 1}')]),

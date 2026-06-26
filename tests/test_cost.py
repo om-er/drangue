@@ -129,3 +129,15 @@ async def test_no_cache_by_default():
     sent = fake.calls[0]
     assert sent["system"] == "rules"
     assert "cache_control" not in sent["tools"][-1]
+
+
+async def test_anthropic_does_not_send_an_idempotency_header():
+    # Anthropic has no request idempotency key; the param is accepted for
+    # interface parity but must not be sent (it would be a silent no-op).
+    fake = FakeAnthropic()
+    model = AnthropicModel("claude-test", client=fake)
+    await model.generate(system="rules", messages=[{"role": "user", "content": "hi"}],
+                         tools=[add], idempotency_key="run-1:1")
+
+    headers = fake.calls[0].get("extra_headers") or {}
+    assert "Idempotency-Key" not in headers

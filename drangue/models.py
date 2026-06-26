@@ -133,14 +133,14 @@ class AnthropicModel(Model):
             params["tools"] = schemas
         params.update(self.kwargs)
 
-        # Request-level idempotency: if the process dies after the API call
-        # returns but before the decision is appended, a resumed run sends the
-        # same key and the provider returns the same response (within its
-        # idempotency window) instead of charging twice or diverging.
-        if idempotency_key:
-            headers = dict(params.get("extra_headers") or {})
-            headers["Idempotency-Key"] = idempotency_key
-            params["extra_headers"] = headers
+        # NOTE: Anthropic's Messages API does not support a request-level
+        # idempotency key (unlike OpenAI). `idempotency_key` is accepted for
+        # interface parity but deliberately NOT sent: a custom header would be a
+        # silent no-op. Consequence: the model call is AT-LEAST-ONCE on resume.
+        # If a crash lands between this call returning and the decision being
+        # appended, a resumed run re-calls the model (possible double charge and
+        # divergence). Make downstream effects idempotent instead (tools do this
+        # via the idempotency_key parameter, see hardening.py).
 
         resp = await self.client.messages.create(**params)
 
@@ -242,7 +242,12 @@ class OpenAIModel(Model):
             params["tools"] = self._to_openai_tools([tool.to_schema() for tool in tools])
         params.update(self.kwargs)
 
-        # Request-level idempotency (see AnthropicModel.generate).
+        # Request-level idempotency (OpenAI-compatible backends honor this header):
+        # if the process dies after the call returns but before the decision is
+        # appended, a resumed run sends the same key and the provider returns the
+        # same response (within its idempotency window) instead of charging twice
+        # or diverging. This makes the model call effectively exactly-once on the
+        # OpenAI path, unlike the Anthropic path (see AnthropicModel.generate).
         if idempotency_key:
             headers = dict(params.get("extra_headers") or {})
             headers["Idempotency-Key"] = idempotency_key

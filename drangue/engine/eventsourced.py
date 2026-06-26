@@ -42,8 +42,9 @@ class EventSourcedEngine:
                     await store.append(run_id, blocked)
                     if emit:
                         await emit(blocked)
-                    return Result(output=output, messages=fold(await store.load(run_id)).messages,
-                                  events=await store.load(run_id))
+                    events = events + [blocked]
+                    return Result(output=output, messages=fold(events).messages,
+                                  events=events)
 
             while True:
                 events = await store.load(run_id)

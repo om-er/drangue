@@ -289,10 +289,16 @@ and the production-grade durability the docstrings advertise.
   interacts with per-tool guardrails and assisted-mode pauses (some siblings may
   need approval while others run), so it needs care. Deterministic seq assignment
   by tool-call order makes it tractable. Not yet done.
-- **Model-call exactly-once: addressed.** A request-level idempotency key
-  (`f"{run_id}:{step.seq}"`) is now threaded into `model.generate`, so a crash
-  between the API call returning and the decision being appended no longer
-  double-charges or diverges on resume, within the provider's idempotency window.
+- **Model-call exactly-once: partial, backend-dependent.** A stable key
+  (`f"{run_id}:{step.seq}"`) is threaded into `model.generate`. OpenAI-compatible
+  backends honor it as an `Idempotency-Key`, so a crash between the call returning
+  and the decision being appended is exactly-once on resume (within the provider's
+  window). Anthropic's Messages API has NO request idempotency key, so the default
+  model is AT-LEAST-ONCE there: resume may re-call and double-charge. Mitigation:
+  keep downstream effects idempotent (tools already do, via wants_idempotency_key),
+  or add a "model-call started" marker before the call so resume can detect an
+  in-flight call. The orchestrator-side replay still reuses a recorded decision;
+  this gap is only the crash window before the decision is recorded.
 - **Sync-tool timeouts bound the caller, not the work.** `wait_for` cannot cancel
   a worker thread, so a timed-out sync tool keeps running and a retry can run
   concurrently with it. Documented in `hardening.py`. Truly bounded execution
