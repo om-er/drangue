@@ -53,7 +53,7 @@ class Agent:
     def __init__(self, model: t.Any = None, tools: list | None = None,
                  instructions: str = "", *, max_steps: int = 20,
                  max_tokens: int = 4096, store=None, engine=None, tracer=None,
-                 router=None, budget=None):
+                 router=None, budget=None, guardrails=None):
         self.router = self._resolve_router(model, router, max_tokens)
         self.tools: dict[str, Tool] = {}
         for obj in tools or []:
@@ -64,8 +64,9 @@ class Agent:
         self.engine = engine or EventSourcedEngine()
         self.tracer = tracer or NullTracer()
         self.budget = budget
+        self.guardrails = guardrails
         self.orchestrator = Orchestrator(max_steps=max_steps)
-        self.executor = Executor(self.router, self.tools)
+        self.executor = Executor(self.router, self.tools, guardrails=guardrails)
 
     @staticmethod
     def _resolve_router(model, router, max_tokens):

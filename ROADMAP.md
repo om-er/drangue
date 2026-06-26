@@ -250,9 +250,9 @@ After Phases 0 to 3, drangue will have:
 - **Phase 4, Cost and latency (Ch10):** DONE. Per-run token and dollar budgets
   enforced before expensive steps (Budget), model routing (Router / RuleRouter),
   model recorded per step, and prompt caching of the stable prefix.
-- **Phase 5, Security and guardrails (Ch11):** trusted/untrusted input tagging,
-  permission scoping in the executor, action gates, output and exfiltration
-  validation.
+- **Phase 5, Security and guardrails (Ch11):** DONE. Permission scoping
+  (allow/deny) and action gates enforced in the executor, input and output
+  guards, fail-closed approval, and reversibility metadata on tools (Guardrails).
 - **Phase 6, Human-in-the-loop and rollout (Ch12):** per-action autonomy modes,
   pause-persist-resume approval built on Phase 2, approvals recorded as signals.
 - **Phase 7, Evals and gates (Ch7, Ch8):** step and trajectory evals, validated

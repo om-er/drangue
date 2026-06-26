@@ -17,6 +17,7 @@ from .errors import (
     ValidationError,
 )
 from .events import Event, Result, Span
+from .guardrails import Guardrails
 from .hardening import ToolPolicy
 from .memory import Memory, MemoryItem, NullMemory
 from .models import AnthropicModel, Model, ModelResponse, OpenAIModel, ToolCall
@@ -61,6 +62,7 @@ __all__ = [
     "Router",
     "SingleModel",
     "RuleRouter",
+    "Guardrails",
 ]
 
 __version__ = "0.0.1"

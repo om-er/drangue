@@ -16,14 +16,21 @@ from __future__ import annotations
 import time
 
 from .events import Event
+from .guardrails import blocked_result
 from .hardening import run_tool, unknown_tool_error
 from .orchestrator import ModelStep, ToolStep
 
 
 class Executor:
-    def __init__(self, router, tools: dict):
+    def __init__(self, router, tools: dict, guardrails=None):
         self.router = router
         self.tools = tools
+        self.guardrails = guardrails
+
+    async def check_input(self, text: str) -> str | None:
+        if self.guardrails is None:
+            return None
+        return await self.guardrails.check_input(text)
 
     async def run(self, step, *, system: str, messages: list,
                   idempotency_key: str, tracer) -> Event:
@@ -84,6 +91,11 @@ class Executor:
         tool = self.tools.get(call.name)
         if tool is None:
             return unknown_tool_error(call.name)
+        # Enforce guardrails in code, regardless of what the model decided.
+        if self.guardrails is not None:
+            reason = await self.guardrails.check_tool(tool, call.arguments)
+            if reason is not None:
+                return blocked_result(tool.name, reason)
         kwargs = dict(call.arguments)
         if tool.wants_idempotency_key:
             # A stable key derived from durable facts (run_id, seq). A tool that

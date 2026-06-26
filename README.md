@@ -136,6 +136,39 @@ receives, for example:
 {"ok": false, "tool": "fetch_metrics", "error": {"category": "timeout", "message": "timeout"}}
 ```
 
+## Guardrails
+
+Constrain what the agent can do, enforced in code regardless of what the model
+decides (a prompt instruction is the thing injection overrides). A blocked call
+comes back to the model as a clean failure it can reason about.
+
+```python
+from drangue import Agent, Guardrails
+
+guard = Guardrails(
+    allow={"read_metrics", "search"},        # the agent is a constrained principal
+    require_approval_for_irreversible=True,   # gate the dangerous ones
+    approver=lambda name, args: ask_human(name, args),
+    input_guard=lambda text: "blocked" if looks_malicious(text) else None,
+    output_guard=lambda name, args: detect_exfiltration(name, args),
+)
+agent = Agent("claude-opus-4-8", tools=tools, guardrails=guard)
+```
+
+Mark a tool's stakes so gates can act on them:
+
+```python
+@tool(reversible=False, requires_approval=True)
+def delete_database(name: str) -> str:
+    """Delete a database (irreversible, always gated)."""
+    ...
+```
+
+The layers are independent: an allow-list bounds reach, action gates stop the
+irreversible, and the input and output guards catch malicious content on the way
+in and suspicious actions on the way out. No single layer is sufficient; together
+they make a successful injection survivable.
+
 ## Durable runs
 
 Point an Agent at a durable store and give a run a stable `run_id`. If the
@@ -230,11 +263,13 @@ The current focus is the production core (`ROADMAP.md`):
   clean structured failures, fallbacks).
 - Done: cost and latency (per-run token and dollar budgets, model routing,
   prompt caching).
-- Next (later phases): security and guardrails, then human-in-the-loop rollout,
-  then the eval harness and deploy gates.
+- Done: security and guardrails (permission scoping, action gates, input and
+  output guards, reversibility metadata).
+- Next (later phases): human-in-the-loop rollout, then the eval harness and
+  deploy gates.
 
-The production core (Phases 0 to 3) is complete; cost engineering (Phase 4) is
-done too.
+The production core (Phases 0 to 3) is complete; cost engineering (Phase 4) and
+security (Phase 5) are done too.
 
 ## Develop
 

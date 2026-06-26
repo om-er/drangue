@@ -59,6 +59,8 @@ class Tool:
     func: t.Callable
     wants_idempotency_key: bool = False
     policy: ToolPolicy | None = None
+    reversible: bool = True            # a wrong call is recoverable
+    requires_approval: bool = False    # must pass an action gate before running
 
     def to_schema(self) -> dict:
         """Return the tool definition in the shape the model API expects."""
@@ -75,7 +77,8 @@ class Tool:
 def tool(func: t.Callable | None = None, *, name: str | None = None,
          description: str | None = None, timeout: float | None = None,
          retries: int = 0, backoff: float = 0.0, max_backoff: float = 30.0,
-         retry_on=None, validate=None, fallback=_UNSET):
+         retry_on=None, validate=None, fallback=_UNSET,
+         reversible: bool = True, requires_approval: bool = False):
     """Decorate a function to expose it as a tool.
 
     Usage:
@@ -132,6 +135,8 @@ def tool(func: t.Callable | None = None, *, name: str | None = None,
             func=fn,
             wants_idempotency_key="idempotency_key" in sig.parameters,
             policy=policy,
+            reversible=reversible,
+            requires_approval=requires_approval,
         )
 
     if func is not None:
