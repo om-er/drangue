@@ -75,6 +75,40 @@ async for event in agent.stream("What is the weather in Tokyo?"):
         print(event.payload["output"])
 ```
 
+## Cost control
+
+Cap a run's spend and it stops gracefully before an unaffordable step, using the
+token usage recorded in the log:
+
+```python
+from drangue import Agent, Budget
+
+agent = Agent("claude-opus-4-8", tools=tools, budget=Budget(max_tokens=200_000))
+# or a dollar budget with a price table:
+agent = Agent("claude-opus-4-8", tools=tools, budget=Budget(
+    max_usd=0.50,
+    prices={"claude-opus-4-8": {"input": 15.0, "output": 75.0}},  # $ per 1M tokens
+))
+```
+
+Route each step to the cheapest model that can handle it. The model that
+actually ran is recorded per step, so routing is visible in the trace and
+counted in the budget:
+
+```python
+from drangue import Agent, RuleRouter
+
+router = RuleRouter(
+    default=cheap_model,
+    rules=[(lambda messages, i: i == 0, smart_model)],   # only the first step is judgment
+)
+agent = Agent(model=router, tools=tools)
+```
+
+For repeated runs, `AnthropicModel("claude-opus-4-8", cache=True)` marks the
+stable prefix (system prompt and tool definitions) for prompt caching. Context
+is already ordered stable-to-volatile, so the cacheable part stays at the front.
+
 ## Resilient tools
 
 Tools are bounded by default and never crash a run: an exception comes back to
@@ -194,10 +228,13 @@ The current focus is the production core (`ROADMAP.md`):
   the three state scopes).
 - Done: hardened tool calls (timeouts, retries with backoff, schema validation,
   clean structured failures, fallbacks).
-- Next (later phases): cost budgets, security and guardrails, and
-  human-in-the-loop rollout.
+- Done: cost and latency (per-run token and dollar budgets, model routing,
+  prompt caching).
+- Next (later phases): security and guardrails, then human-in-the-loop rollout,
+  then the eval harness and deploy gates.
 
-The production core (Phases 0 to 3) is complete.
+The production core (Phases 0 to 3) is complete; cost engineering (Phase 4) is
+done too.
 
 ## Develop
 

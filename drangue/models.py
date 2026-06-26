@@ -52,9 +52,10 @@ class AnthropicModel(Model):
     """Default adapter for Claude models via the async Anthropic SDK."""
 
     def __init__(self, model: str, *, client: t.Any = None,
-                 max_tokens: int = 4096, **kwargs):
+                 max_tokens: int = 4096, cache: bool = False, **kwargs):
         self.model = model
         self.max_tokens = max_tokens
+        self.cache = cache
         self.kwargs = kwargs
         if client is None:
             try:
@@ -111,9 +112,21 @@ class AnthropicModel(Model):
             "messages": self._render_messages(messages),
         }
         if system:
-            params["system"] = system
+            # Context is ordered stable-to-volatile: system and tools first (they
+            # never change within a run), conversation after. With cache on, mark
+            # that stable prefix so the provider can reuse it across steps.
+            if self.cache:
+                params["system"] = [{
+                    "type": "text", "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }]
+            else:
+                params["system"] = system
         if tools:
-            params["tools"] = [tool.to_schema() for tool in tools]
+            schemas = [tool.to_schema() for tool in tools]
+            if self.cache and schemas:
+                schemas[-1] = {**schemas[-1], "cache_control": {"type": "ephemeral"}}
+            params["tools"] = schemas
         params.update(self.kwargs)
 
         resp = await self.client.messages.create(**params)

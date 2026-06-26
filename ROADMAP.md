@@ -247,8 +247,9 @@ After Phases 0 to 3, drangue will have:
 
 ## Out of scope this round (later phases)
 
-- **Phase 4, Cost and latency (Ch10):** per-session budgets enforced before
-  expensive steps, model routing, caching-friendly context ordering.
+- **Phase 4, Cost and latency (Ch10):** DONE. Per-run token and dollar budgets
+  enforced before expensive steps (Budget), model routing (Router / RuleRouter),
+  model recorded per step, and prompt caching of the stable prefix.
 - **Phase 5, Security and guardrails (Ch11):** trusted/untrusted input tagging,
   permission scoping in the executor, action gates, output and exfiltration
   validation.

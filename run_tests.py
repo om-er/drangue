@@ -16,6 +16,7 @@ MODULES = [
     "tests.test_observability",
     "tests.test_durability",
     "tests.test_hardening",
+    "tests.test_cost",
 ]
 
 

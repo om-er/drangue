@@ -23,6 +23,7 @@ from .executor import Executor
 from .models import AnthropicModel
 from .observability import ConsoleTracer, NullTracer
 from .orchestrator import Orchestrator
+from .routing import SingleModel
 from .store import InMemoryStore
 from .tool import Tool
 from .tool import tool as make_tool
@@ -49,10 +50,11 @@ def _new_run_id() -> str:
 class Agent:
     """A model plus tools. Call `run` / `stream` (async) or `run_sync`."""
 
-    def __init__(self, model: t.Any, tools: list | None = None,
+    def __init__(self, model: t.Any = None, tools: list | None = None,
                  instructions: str = "", *, max_steps: int = 20,
-                 max_tokens: int = 4096, store=None, engine=None, tracer=None):
-        self.model = _resolve_model(model, max_tokens)
+                 max_tokens: int = 4096, store=None, engine=None, tracer=None,
+                 router=None, budget=None):
+        self.router = self._resolve_router(model, router, max_tokens)
         self.tools: dict[str, Tool] = {}
         for obj in tools or []:
             tool = _as_tool(obj)
@@ -61,8 +63,17 @@ class Agent:
         self.store = store or InMemoryStore()
         self.engine = engine or EventSourcedEngine()
         self.tracer = tracer or NullTracer()
+        self.budget = budget
         self.orchestrator = Orchestrator(max_steps=max_steps)
-        self.executor = Executor(self.model, self.tools)
+        self.executor = Executor(self.router, self.tools)
+
+    @staticmethod
+    def _resolve_router(model, router, max_tokens):
+        if router is not None:
+            return router
+        if model is not None and hasattr(model, "choose"):
+            return model  # a Router was passed as `model`
+        return SingleModel(_resolve_model(model, max_tokens))
 
     def _tracer_for(self, trace: bool):
         return ConsoleTracer() if trace else self.tracer
@@ -74,7 +85,7 @@ class Agent:
         return await self.engine.run(
             run_id=rid, orchestrator=self.orchestrator, executor=self.executor,
             store=self.store, system=self.instructions, input=input,
-            tracer=self._tracer_for(trace),
+            tracer=self._tracer_for(trace), budget=self.budget,
         )
 
     async def stream(self, input: str, *, run_id: str | None = None,
@@ -94,7 +105,7 @@ class Agent:
                     run_id=rid, orchestrator=self.orchestrator,
                     executor=self.executor, store=self.store,
                     system=self.instructions, input=input, emit=emit,
-                    tracer=tracer,
+                    tracer=tracer, budget=self.budget,
                 )
             finally:
                 await queue.put(sentinel)

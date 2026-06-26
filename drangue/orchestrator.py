@@ -20,6 +20,7 @@ class ModelStep:
     """Ask the model to decide what to do next."""
 
     seq: int
+    index: int = 0   # which model call this is (0-based), for routing
 
 
 @dataclass
@@ -118,4 +119,4 @@ class Orchestrator:
             return ToolStep(seq=state.next_seq, call=state.pending[0])
         if state.model_calls >= self.max_steps:
             return Done(f"(stopped: reached max_steps={self.max_steps})")
-        return ModelStep(seq=state.next_seq)
+        return ModelStep(seq=state.next_seq, index=state.model_calls)

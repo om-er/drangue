@@ -16,12 +16,12 @@ from __future__ import annotations
 
 from ..events import Event, Result
 from ..observability import NullTracer
-from ..orchestrator import Done, fold
+from ..orchestrator import Done, ModelStep, fold
 
 
 class EventSourcedEngine:
     async def run(self, *, run_id, orchestrator, executor, store, system, input,
-                  emit=None, tracer=None) -> Result:
+                  emit=None, tracer=None, budget=None) -> Result:
         tracer = tracer or NullTracer()
 
         with tracer.span("run", run_id=run_id) as run_span:
@@ -35,6 +35,13 @@ class EventSourcedEngine:
                 events = await store.load(run_id)
                 state = fold(events)
                 step = orchestrator.next(state)
+
+                # Enforce the budget before an expensive (model) step, using the
+                # spend already recorded in the log. Finish gracefully instead of
+                # starting work the run cannot afford.
+                if (isinstance(step, ModelStep) and budget is not None
+                        and budget.exceeded(events)):
+                    step = Done("(stopped: budget exhausted)")
 
                 if isinstance(step, Done):
                     run_span.set("output", step.output)

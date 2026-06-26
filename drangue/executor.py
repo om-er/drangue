@@ -21,8 +21,8 @@ from .orchestrator import ModelStep, ToolStep
 
 
 class Executor:
-    def __init__(self, model, tools: dict):
-        self.model = model
+    def __init__(self, router, tools: dict):
+        self.router = router
         self.tools = tools
 
     async def run(self, step, *, system: str, messages: list,
@@ -34,9 +34,11 @@ class Executor:
         raise TypeError(f"Unknown step: {step!r}")
 
     async def _run_model(self, step, *, system, messages, tracer) -> Event:
+        model = self.router.choose(messages=messages, step_index=step.index)
+        model_name = getattr(model, "model", None)
         t0 = time.monotonic()
-        with tracer.span("model", seq=step.seq) as span:
-            resp = await self.model.generate(
+        with tracer.span("model", seq=step.seq, model=model_name) as span:
+            resp = await model.generate(
                 system=system, messages=messages, tools=list(self.tools.values()),
             )
             duration = (time.monotonic() - t0) * 1000.0
@@ -58,6 +60,7 @@ class Executor:
                 "tool_calls": tool_calls,
                 "usage": resp.usage,
                 "reasoning": resp.reasoning,
+                "model": model_name,
             },
         )
 

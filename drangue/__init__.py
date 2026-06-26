@@ -6,6 +6,7 @@ same facade grows into durability, observability, and recovery without changing.
 """
 
 from .agent import Agent
+from .budget import Budget
 from .engine import Engine, EventSourcedEngine
 from .errors import (
     AuthError,
@@ -20,6 +21,7 @@ from .hardening import ToolPolicy
 from .memory import Memory, MemoryItem, NullMemory
 from .models import AnthropicModel, Model, ModelResponse, OpenAIModel, ToolCall
 from .observability import ConsoleTracer, NullTracer, OTelTracer, Tracer
+from .routing import RuleRouter, Router, SingleModel
 from .store import InMemoryStore, SQLiteStore, Store
 from .tool import Tool, harden, tool
 
@@ -55,6 +57,10 @@ __all__ = [
     "Memory",
     "MemoryItem",
     "NullMemory",
+    "Budget",
+    "Router",
+    "SingleModel",
+    "RuleRouter",
 ]
 
 __version__ = "0.0.1"
