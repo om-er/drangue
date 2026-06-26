@@ -75,6 +75,31 @@ async for event in agent.stream("What is the weather in Tokyo?"):
         print(event.payload["output"])
 ```
 
+## Durable runs
+
+Point an Agent at a durable store and give a run a stable `run_id`. If the
+process dies mid-run, a new one resumes from exactly where it stopped: recorded
+steps are replayed as facts, so the model is not re-called and side effects do
+not happen twice.
+
+```python
+from drangue import Agent, SQLiteStore
+
+agent = Agent("claude-opus-4-8", tools=[book_flight], store=SQLiteStore("runs.db"))
+result = await agent.run("Book my trip", run_id="trip-42")   # crash, rerun, same id -> resumes
+```
+
+A tool that causes a side effect can declare an `idempotency_key` parameter. The
+runtime injects a stable key derived from the run and step (it never appears in
+the model-facing schema), so the tool can deduplicate downstream:
+
+```python
+@tool
+def book_flight(city: str, idempotency_key: str = "") -> str:
+    """Book a flight."""
+    return charge_once(city, key=idempotency_key)
+```
+
 ## Cheap and local models
 
 `drangue` ships two adapters. One of them, `OpenAIModel`, talks to any
@@ -138,8 +163,10 @@ The current focus is the production core (`ROADMAP.md`):
 - Done: orchestrator/executor split, event log, async core.
 - Done: observability (per-step timing and cost, a trace tree, console and
   OpenTelemetry tracers, reasoning capture).
-- Next: durable resume after a crash (SQLite store, replay, idempotency), then
-  hardened tool calls (timeouts, retries, validation).
+- Done: durable resume after a crash (SQLite store, replay, idempotency keys,
+  the three state scopes).
+- Next: hardened tool calls (timeouts, retries, schema validation, clean
+  failure), then cost budgets, guardrails, and human-in-the-loop.
 
 ## Develop
 

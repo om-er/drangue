@@ -14,6 +14,7 @@ MODULES = [
     "tests.test_openai_model",
     "tests.test_engine",
     "tests.test_observability",
+    "tests.test_durability",
 ]
 
 

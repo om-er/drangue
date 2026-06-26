@@ -43,6 +43,10 @@ def _json_type(annotation: t.Any) -> dict:
     return {"type": "string"}
 
 
+# Parameters the runtime injects, hidden from the model-facing schema.
+RESERVED_PARAMS = {"idempotency_key"}
+
+
 @dataclass
 class Tool:
     """A callable plus the schema describing how a model should call it."""
@@ -51,6 +55,7 @@ class Tool:
     description: str
     parameters: dict
     func: t.Callable
+    wants_idempotency_key: bool = False
 
     def to_schema(self) -> dict:
         """Return the tool definition in the shape the model API expects."""
@@ -93,6 +98,8 @@ def tool(func: t.Callable | None = None, *, name: str | None = None,
                 continue
             if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
                 continue
+            if pname in RESERVED_PARAMS:
+                continue  # runtime-injected; never shown to or filled by the model
             properties[pname] = _json_type(hints.get(pname, str))
             if param.default is inspect.Parameter.empty:
                 required.append(pname)
@@ -106,6 +113,7 @@ def tool(func: t.Callable | None = None, *, name: str | None = None,
             description=description or inspect.getdoc(fn) or "",
             parameters=parameters,
             func=fn,
+            wants_idempotency_key="idempotency_key" in sig.parameters,
         )
 
     if func is not None:

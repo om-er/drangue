@@ -18,5 +18,6 @@ class Store(t.Protocol):
 
 
 from .memory import InMemoryStore  # noqa: E402
+from .sqlite import SQLiteStore  # noqa: E402
 
-__all__ = ["Store", "InMemoryStore"]
+__all__ = ["Store", "InMemoryStore", "SQLiteStore"]

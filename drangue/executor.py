@@ -32,7 +32,7 @@ class Executor:
         if isinstance(step, ModelStep):
             return await self._run_model(step, system=system, messages=messages, tracer=tracer)
         if isinstance(step, ToolStep):
-            return await self._run_tool(step, tracer=tracer)
+            return await self._run_tool(step, idempotency_key=idempotency_key, tracer=tracer)
         raise TypeError(f"Unknown step: {step!r}")
 
     async def _run_model(self, step, *, system, messages, tracer) -> Event:
@@ -63,12 +63,12 @@ class Executor:
             },
         )
 
-    async def _run_tool(self, step, *, tracer) -> Event:
+    async def _run_tool(self, step, *, idempotency_key: str, tracer) -> Event:
         call = step.call
         t0 = time.monotonic()
         with tracer.span("tool", seq=step.seq, name=call.name,
                          arguments=call.arguments) as span:
-            content = await self._dispatch(call)
+            content = await self._dispatch(call, idempotency_key)
             duration = (time.monotonic() - t0) * 1000.0
             span.set("content", content)
             span.set("duration_ms", duration)
@@ -79,16 +79,21 @@ class Executor:
             payload={"call_id": call.id, "name": call.name, "content": content},
         )
 
-    async def _dispatch(self, call) -> str:
+    async def _dispatch(self, call, idempotency_key: str) -> str:
         tool = self.tools.get(call.name)
         if tool is None:
             return f"Error: unknown tool '{call.name}'"
+        kwargs = dict(call.arguments)
+        if tool.wants_idempotency_key:
+            # A stable key derived from durable facts (run_id, seq). A tool that
+            # declares it can pass it downstream to deduplicate side effects.
+            kwargs["idempotency_key"] = idempotency_key
         try:
             if inspect.iscoroutinefunction(tool.func):
-                result = await tool.func(**call.arguments)
+                result = await tool.func(**kwargs)
             else:
                 # Run sync tools off the event loop so they cannot block it.
-                result = await asyncio.to_thread(tool.func, **call.arguments)
+                result = await asyncio.to_thread(tool.func, **kwargs)
         except Exception as exc:  # clean failure over a crashed run
             return f"Error: {exc}"
         return result if isinstance(result, str) else json.dumps(result, default=str)

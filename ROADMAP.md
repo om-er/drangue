@@ -180,7 +180,7 @@ without reading source, and `Result` reports total tokens and cost.
 
 ---
 
-## Phase 2: Durability and recovery
+## Phase 2: Durability and recovery  (done)
 
 **Goal.** A run survives process death and resumes exactly where it stopped, with
 no duplicated side effects. The book's central chapter. (Ch4, Ch5)
