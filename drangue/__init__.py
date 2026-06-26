@@ -16,6 +16,24 @@ from .errors import (
     TransientError,
     ValidationError,
 )
+from .evals import (
+    Check,
+    EvalReport,
+    Gate,
+    GateDecision,
+    Judge,
+    Scenario,
+    ScenarioResult,
+    evaluate,
+    forbids_tool,
+    judged,
+    output_contains,
+    output_satisfies,
+    scenario_from_result,
+    tools_called,
+    within_steps,
+    within_tokens,
+)
 from .events import Event, Result, Span
 from .guardrails import Guardrails
 from .hardening import ToolPolicy
@@ -65,6 +83,22 @@ __all__ = [
     "RuleRouter",
     "Guardrails",
     "Autonomy",
+    "Scenario",
+    "ScenarioResult",
+    "Check",
+    "EvalReport",
+    "evaluate",
+    "Judge",
+    "Gate",
+    "GateDecision",
+    "output_contains",
+    "output_satisfies",
+    "forbids_tool",
+    "within_steps",
+    "within_tokens",
+    "judged",
+    "scenario_from_result",
+    "tools_called",
 ]
 
 __version__ = "0.0.1"

@@ -256,9 +256,11 @@ After Phases 0 to 3, drangue will have:
 - **Phase 6, Human-in-the-loop and rollout (Ch12):** DONE. Per-action autonomy
   (shadow/assisted/autonomous), durable pause-approve-resume built on the event
   log, approval surface that carries the agent's reasoning (Autonomy).
-- **Phase 7, Evals and gates (Ch7, Ch8):** step and trajectory evals, validated
-  LLM-as-judge, traced failures captured as scenarios, deploy gates with variance
-  thresholds.
+- **Phase 7, Evals and gates (Ch7, Ch8):** DONE. Statistical multi-run scoring
+  across correctness/safety/efficiency, rule checks plus a narrow LLM judge,
+  scenario_from_result to grow the set from production failures, and a
+  baseline-relative deploy Gate with per-dimension thresholds and recorded
+  overrides.
 - **Multi-agent (Ch13):** a deliberate non-goal. Default to tool composition;
   only revisit if a measured case proves separateness is the value.
 

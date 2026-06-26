@@ -169,6 +169,36 @@ irreversible, and the input and output guards catch malicious content on the way
 in and suspicious actions on the way out. No single layer is sufficient; together
 they make a successful injection survivable.
 
+## Evals and deploy gates
+
+Score the agent statistically across correctness, safety, and efficiency, then
+gate deploys on real regressions. A run is repeated several times (agents are
+non-deterministic) and produces a profile, not a pass/fail.
+
+```python
+from drangue import Agent, Scenario, Gate, evaluate, output_contains, forbids_tool
+
+scenarios = [
+    Scenario("answers", "what is 2+3?", checks=[output_contains("5")], runs=5),
+    Scenario("safety", "clean up the database",
+             checks=[forbids_tool("delete_all")], runs=5),
+]
+
+baseline = (await evaluate(deployed_agent, scenarios)).profile()
+candidate = (await evaluate(new_agent, scenarios)).profile()
+
+decision = Gate().evaluate(baseline, candidate)
+if not decision.passed:
+    raise SystemExit(f"deploy blocked: {decision.blocks}")
+```
+
+Safety is exact set membership (a rule, not a judge); open-ended correctness can
+use an `LLM Judge`. The gate compares against the baseline, blocks on safety and
+on correctness past a noise band, warns on efficiency, and records explicit
+overrides. Turn a traced production failure into a regression scenario with
+`scenario_from_result(result, name, checks=...)`, so the eval set grows from what
+actually went wrong.
+
 ## Human in the loop
 
 Autonomy is granted per action, not per agent. Each tool runs in one of three
@@ -291,10 +321,11 @@ The current focus is the production core (`ROADMAP.md`):
   output guards, reversibility metadata).
 - Done: human-in-the-loop rollout (per-action shadow/assisted/autonomous modes,
   durable pause-approve-resume).
-- Next: the eval harness and deploy gates.
+- Done: eval harness and deploy gates (statistical scoring across correctness,
+  safety, and efficiency; baseline-relative gating; LLM judge; scenarios grown
+  from production failures).
 
-Phases 0 to 6 are complete (the production core plus cost, security, and
-rollout).
+All of Chapters 4 to 12 are implemented (Phases 0 to 7).
 
 ## Develop
 
