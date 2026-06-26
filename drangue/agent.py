@@ -17,6 +17,7 @@ import asyncio
 import typing as t
 import uuid
 
+from . import rollout
 from .engine import EventSourcedEngine
 from .events import Event, Result
 from .executor import Executor
@@ -53,7 +54,7 @@ class Agent:
     def __init__(self, model: t.Any = None, tools: list | None = None,
                  instructions: str = "", *, max_steps: int = 20,
                  max_tokens: int = 4096, store=None, engine=None, tracer=None,
-                 router=None, budget=None, guardrails=None):
+                 router=None, budget=None, guardrails=None, autonomy=None):
         self.router = self._resolve_router(model, router, max_tokens)
         self.tools: dict[str, Tool] = {}
         for obj in tools or []:
@@ -65,6 +66,7 @@ class Agent:
         self.tracer = tracer or NullTracer()
         self.budget = budget
         self.guardrails = guardrails
+        self.autonomy = autonomy
         self.orchestrator = Orchestrator(max_steps=max_steps)
         self.executor = Executor(self.router, self.tools, guardrails=guardrails)
 
@@ -79,15 +81,42 @@ class Agent:
     def _tracer_for(self, trace: bool):
         return ConsoleTracer() if trace else self.tracer
 
-    async def run(self, input: str, *, run_id: str | None = None,
+    async def run(self, input: str | None = None, *, run_id: str | None = None,
                   trace: bool = False) -> Result:
-        """Run to completion. Pass an existing run_id to resume (Phase 2)."""
+        """Run to completion, or resume a paused/crashed run by run_id."""
         rid = run_id or _new_run_id()
         return await self.engine.run(
             run_id=rid, orchestrator=self.orchestrator, executor=self.executor,
-            store=self.store, system=self.instructions, input=input,
+            store=self.store, system=self.instructions, input=input or "",
             tracer=self._tracer_for(trace), budget=self.budget,
+            autonomy=self.autonomy,
         )
+
+    async def resume(self, run_id: str, *, trace: bool = False) -> Result:
+        """Resume a run (e.g. after an approval). Alias for run with a run_id."""
+        return await self.run(run_id=run_id, trace=trace)
+
+    async def pending_approvals(self, run_id: str) -> list:
+        """Actions awaiting a human decision, each with the agent's reasoning."""
+        events = await self.store.load(run_id)
+        return rollout.pending_approvals(events)
+
+    async def approve(self, run_id: str, call_id: str | None = None) -> None:
+        """Approve a pending action. Defaults to the one pending approval."""
+        events = await self.store.load(run_id)
+        cid = call_id or rollout.first_pending_call(events)
+        await self.store.append(run_id, Event(
+            seq=rollout.next_seq(events), type="approval_granted",
+            payload={"call_id": cid}))
+
+    async def reject(self, run_id: str, call_id: str | None = None,
+                     reason: str = "") -> None:
+        """Reject a pending action; the agent is told and continues."""
+        events = await self.store.load(run_id)
+        cid = call_id or rollout.first_pending_call(events)
+        await self.store.append(run_id, Event(
+            seq=rollout.next_seq(events), type="approval_denied",
+            payload={"call_id": cid, "reason": reason}))
 
     async def stream(self, input: str, *, run_id: str | None = None,
                      trace: bool = False) -> t.AsyncIterator[Event]:
@@ -106,7 +135,7 @@ class Agent:
                     run_id=rid, orchestrator=self.orchestrator,
                     executor=self.executor, store=self.store,
                     system=self.instructions, input=input, emit=emit,
-                    tracer=tracer, budget=self.budget,
+                    tracer=tracer, budget=self.budget, autonomy=self.autonomy,
                 )
             finally:
                 await queue.put(sentinel)
@@ -126,7 +155,7 @@ class Agent:
             except asyncio.CancelledError:
                 pass
 
-    def run_sync(self, input: str, *, run_id: str | None = None,
+    def run_sync(self, input: str | None = None, *, run_id: str | None = None,
                  trace: bool = False) -> Result:
         """Convenience wrapper for scripts not already in an event loop."""
         return asyncio.run(self.run(input, run_id=run_id, trace=trace))

@@ -18,6 +18,7 @@ MODULES = [
     "tests.test_hardening",
     "tests.test_cost",
     "tests.test_security",
+    "tests.test_rollout",
 ]
 
 

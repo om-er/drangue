@@ -253,8 +253,9 @@ After Phases 0 to 3, drangue will have:
 - **Phase 5, Security and guardrails (Ch11):** DONE. Permission scoping
   (allow/deny) and action gates enforced in the executor, input and output
   guards, fail-closed approval, and reversibility metadata on tools (Guardrails).
-- **Phase 6, Human-in-the-loop and rollout (Ch12):** per-action autonomy modes,
-  pause-persist-resume approval built on Phase 2, approvals recorded as signals.
+- **Phase 6, Human-in-the-loop and rollout (Ch12):** DONE. Per-action autonomy
+  (shadow/assisted/autonomous), durable pause-approve-resume built on the event
+  log, approval surface that carries the agent's reasoning (Autonomy).
 - **Phase 7, Evals and gates (Ch7, Ch8):** step and trajectory evals, validated
   LLM-as-judge, traced failures captured as scenarios, deploy gates with variance
   thresholds.

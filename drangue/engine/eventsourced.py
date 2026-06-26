@@ -14,14 +14,15 @@ survives process death and resumes exactly.
 
 from __future__ import annotations
 
+from .. import rollout
 from ..events import Event, Result
 from ..observability import NullTracer
-from ..orchestrator import Done, ModelStep, fold
+from ..orchestrator import Done, ModelStep, ToolStep, fold
 
 
 class EventSourcedEngine:
     async def run(self, *, run_id, orchestrator, executor, store, system, input,
-                  emit=None, tracer=None, budget=None) -> Result:
+                  emit=None, tracer=None, budget=None, autonomy=None) -> Result:
         tracer = tracer or NullTracer()
 
         with tracer.span("run", run_id=run_id) as run_span:
@@ -63,6 +64,17 @@ class EventSourcedEngine:
                         events = await store.load(run_id)
                     return Result(output=step.output, messages=state.messages, events=events)
 
+                # Per-action autonomy (Chapter 12): shadow proposes without
+                # acting, assisted pauses for approval, autonomous falls through.
+                if isinstance(step, ToolStep) and autonomy is not None:
+                    action, paused = await self._apply_autonomy(
+                        step, autonomy, events, state, run_id, store, run_span, emit)
+                    if action == "paused":
+                        return paused
+                    if action == "handled":
+                        continue
+                    # action == "execute": fall through to normal execution.
+
                 # Already recorded? Then this is a replay; fold it and move on.
                 recorded = next((e for e in events if e.seq == step.seq), None)
                 if recorded is None:
@@ -74,3 +86,47 @@ class EventSourcedEngine:
                     await store.append(run_id, produced)
                     if emit:
                         await emit(produced)
+
+    async def _apply_autonomy(self, step, autonomy, events, state, run_id, store,
+                              run_span, emit):
+        """Return (action, result): action is paused | handled | execute."""
+        call = step.call
+        mode = autonomy.mode_for(call.name)
+
+        if mode == rollout.SHADOW:
+            ev = Event(seq=step.seq, type="tool_result", payload={
+                "call_id": call.id, "name": call.name,
+                "content": rollout.shadow_result(call),
+            })
+            await store.append(run_id, ev)
+            if emit:
+                await emit(ev)
+            return "handled", None
+
+        if mode == rollout.ASSISTED:
+            decision, reason = rollout.approval_decision(events, call.id)
+            if decision == "denied":
+                ev = Event(seq=step.seq, type="tool_result", payload={
+                    "call_id": call.id, "name": call.name,
+                    "content": rollout.denied_result(call, reason),
+                })
+                await store.append(run_id, ev)
+                if emit:
+                    await emit(ev)
+                return "handled", None
+            if decision == "pending":
+                if not rollout.has_approval_request(events, call.id):
+                    req = Event(seq=step.seq, type="approval_requested", payload={
+                        "call_id": call.id, "tool": call.name,
+                        "arguments": call.arguments, **rollout.last_reasoning(events),
+                    })
+                    await store.append(run_id, req)
+                    if emit:
+                        await emit(req)
+                run_span.set("status", "paused")
+                events = await store.load(run_id)
+                return "paused", Result(output="(paused: awaiting approval)",
+                                        messages=state.messages, events=events)
+            # decision == "granted": execute the now-approved action.
+
+        return "execute", None

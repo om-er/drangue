@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .rollout import pending_approvals as _pending_approvals
+
 
 @dataclass
 class Event:
@@ -77,6 +79,20 @@ class Result:
     def latency_ms(self) -> float:
         """Total time spent in model and tool steps."""
         return sum(e.duration_ms or 0.0 for e in self.events)
+
+    @property
+    def status(self) -> str:
+        """completed, paused (awaiting approval), or running."""
+        if any(e.type == "run_finished" for e in self.events):
+            return "completed"
+        if self.pending_approvals:
+            return "paused"
+        return "running"
+
+    @property
+    def pending_approvals(self) -> list:
+        """Approval requests awaiting a human decision, with the agent's case."""
+        return _pending_approvals(self.events)
 
     @property
     def trace(self) -> Span:

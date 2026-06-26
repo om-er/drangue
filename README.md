@@ -169,6 +169,30 @@ irreversible, and the input and output guards catch malicious content on the way
 in and suspicious actions on the way out. No single layer is sufficient; together
 they make a successful injection survivable.
 
+## Human in the loop
+
+Autonomy is granted per action, not per agent. Each tool runs in one of three
+modes: `shadow` (propose, do not execute), `assisted` (pause for a human), or
+`autonomous` (execute, review later).
+
+```python
+from drangue import Agent, Autonomy
+
+agent = Agent("claude-opus-4-8", tools=tools, store=SQLiteStore("runs.db"),
+              autonomy=Autonomy(default="autonomous", modes={"wire_funds": "assisted"}))
+
+result = await agent.run("pay the invoice", run_id="pay-1")
+if result.status == "paused":
+    for p in result.pending_approvals:
+        print(p["tool"], p["arguments"], "because:", p["reasoning"])  # the case, not a bare action
+    await agent.approve("pay-1")        # or agent.reject("pay-1", reason="...")
+    result = await agent.resume("pay-1")
+```
+
+An assisted action is a durable pause: the approval request and the human's
+decision are events in the log, so a paused run survives a process restart and
+resumes by replay. The side effect happens once, only after approval.
+
 ## Durable runs
 
 Point an Agent at a durable store and give a run a stable `run_id`. If the
@@ -265,11 +289,12 @@ The current focus is the production core (`ROADMAP.md`):
   prompt caching).
 - Done: security and guardrails (permission scoping, action gates, input and
   output guards, reversibility metadata).
-- Next (later phases): human-in-the-loop rollout, then the eval harness and
-  deploy gates.
+- Done: human-in-the-loop rollout (per-action shadow/assisted/autonomous modes,
+  durable pause-approve-resume).
+- Next: the eval harness and deploy gates.
 
-The production core (Phases 0 to 3) is complete; cost engineering (Phase 4) and
-security (Phase 5) are done too.
+Phases 0 to 6 are complete (the production core plus cost, security, and
+rollout).
 
 ## Develop
 

@@ -22,6 +22,7 @@ from .hardening import ToolPolicy
 from .memory import Memory, MemoryItem, NullMemory
 from .models import AnthropicModel, Model, ModelResponse, OpenAIModel, ToolCall
 from .observability import ConsoleTracer, NullTracer, OTelTracer, Tracer
+from .rollout import Autonomy
 from .routing import RuleRouter, Router, SingleModel
 from .store import InMemoryStore, SQLiteStore, Store
 from .tool import Tool, harden, tool
@@ -63,6 +64,7 @@ __all__ = [
     "SingleModel",
     "RuleRouter",
     "Guardrails",
+    "Autonomy",
 ]
 
 __version__ = "0.0.1"
