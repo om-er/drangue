@@ -42,7 +42,7 @@ class ReactiveModel(Model):
         self.tool_args = tool_args or {}
         self.final = final
 
-    async def generate(self, *, system, messages, tools):
+    async def generate(self, *, system, messages, tools, idempotency_key=None):
         already_used_tool = any(m.get("role") == "tool" for m in messages)
         if self.tool_name and not already_used_tool:
             return ModelResponse(tool_calls=[ToolCall("c1", self.tool_name, self.tool_args)])
@@ -53,7 +53,7 @@ class FixedTextModel(Model):
     def __init__(self, text):
         self.text = text
 
-    async def generate(self, *, system, messages, tools):
+    async def generate(self, *, system, messages, tools, idempotency_key=None):
         return ModelResponse(text=self.text)
 
 

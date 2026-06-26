@@ -20,7 +20,7 @@ class CountingModel(Model):
         self.i = 0
         self.calls = 0
 
-    async def generate(self, *, system, messages, tools):
+    async def generate(self, *, system, messages, tools, idempotency_key=None):
         self.calls += 1
         resp = self.steps[self.i]
         self.i += 1

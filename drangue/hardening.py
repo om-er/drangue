@@ -86,6 +86,11 @@ async def _invoke(tool, kwargs: dict, timeout: float | None):
         # Run sync tools off the event loop so they cannot block it.
         coro = asyncio.to_thread(tool.func, **kwargs)
     if timeout is not None:
+        # Caveat: for a SYNC tool, wait_for cancels the waiter but the worker
+        # thread keeps running to completion (Python cannot cancel threads). So
+        # the timeout bounds the caller, not the side effect, and a retry may run
+        # concurrently with the orphaned first attempt. Truly bounded execution
+        # needs a cancellable async tool or an out-of-process worker.
         return await asyncio.wait_for(coro, timeout)
     return await coro
 

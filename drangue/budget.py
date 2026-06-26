@@ -9,6 +9,11 @@ deterministic and replay-safe.
 Token budgets always work. A dollar budget also needs a price table and the
 model name recorded per step (the executor records it), since routing can send
 different steps to different models.
+
+Caveat: this is a soft ceiling, not a hard one. `exceeded` only sees usage that
+is already recorded, so the step that pushes a run over the limit still runs; the
+budget stops the NEXT step. Overshoot is bounded by one model call. For a hard
+ceiling you would pre-estimate the next step's cost before allowing it.
 """
 
 from __future__ import annotations

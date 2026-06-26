@@ -35,11 +35,15 @@ class EventSourcedEngine:
                 # Input guardrail: a blocked input ends the run before any work.
                 reason = await executor.check_input(input)
                 if reason is not None:
-                    blocked = Event(seq=1, type="run_finished",
-                                    payload={"output": f"(blocked: {reason})", "blocked": True})
+                    events = await store.load(run_id)
+                    output = f"(blocked: {reason})"
+                    blocked = Event(seq=rollout.next_seq(events), type="run_finished",
+                                    payload={"output": output, "blocked": True})
                     await store.append(run_id, blocked)
                     if emit:
                         await emit(blocked)
+                    return Result(output=output, messages=fold(await store.load(run_id)).messages,
+                                  events=await store.load(run_id))
 
             while True:
                 events = await store.load(run_id)

@@ -31,7 +31,7 @@ class LoopingModel(Model):
         self.per_call_tokens = per_call_tokens
         self.calls = 0
 
-    async def generate(self, *, system, messages, tools):
+    async def generate(self, *, system, messages, tools, idempotency_key=None):
         self.calls += 1
         return ModelResponse(
             tool_calls=[ToolCall(f"c{self.calls}", "add", {"a": 1, "b": 1})],
@@ -78,7 +78,7 @@ async def test_rule_router_picks_model_per_step():
             self.i = 0
             self.calls = 0
 
-        async def generate(self, *, system, messages, tools):
+        async def generate(self, *, system, messages, tools, idempotency_key=None):
             self.calls += 1
             resp = self.steps[self.i]
             self.i += 1

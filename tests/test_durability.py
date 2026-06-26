@@ -34,7 +34,7 @@ class ScriptedModel(Model):
         self.i = 0
         self.calls = 0
 
-    async def generate(self, *, system, messages, tools):
+    async def generate(self, *, system, messages, tools, idempotency_key=None):
         self.calls += 1
         step = self.steps[self.i]
         self.i += 1
@@ -154,3 +154,19 @@ async def test_null_memory_is_the_default_seam():
     mem = NullMemory()
     assert await mem.recall("anything") == []
     await mem.remember(MemoryItem(key="k", value="v"))   # no-op, does not raise
+
+
+async def test_model_call_receives_a_stable_idempotency_key():
+    class KeyCapturingModel(Model):
+        def __init__(self):
+            self.keys = []
+
+        async def generate(self, *, system, messages, tools, idempotency_key=None):
+            self.keys.append(idempotency_key)
+            return ModelResponse(text="done")
+
+    model = KeyCapturingModel()
+    await Agent(model=model, tools=[add]).run("go", run_id="rid")
+    # The first model decision is seq 1 (seq 0 is run_started), so the request
+    # idempotency key is stable across a crash-and-resume.
+    assert model.keys == ["rid:1"]

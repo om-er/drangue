@@ -43,8 +43,8 @@ class Model(abc.ABC):
     """Implement async `generate` and you are a drangue model."""
 
     @abc.abstractmethod
-    async def generate(self, *, system: str, messages: list[dict],
-                       tools: list) -> ModelResponse:
+    async def generate(self, *, system: str, messages: list[dict], tools: list,
+                       idempotency_key: str | None = None) -> ModelResponse:
         ...
 
 
@@ -101,11 +101,15 @@ class AnthropicModel(Model):
                         "name": c["name"],
                         "input": c["arguments"],
                     })
-                out.append({"role": "assistant", "content": blocks})
+                # Anthropic rejects an empty content array. An assistant turn
+                # with neither text nor tool calls is terminal today (it never
+                # gets re-sent), but guard against it rather than leave the trap.
+                if blocks:
+                    out.append({"role": "assistant", "content": blocks})
         flush()
         return out
 
-    async def generate(self, *, system, messages, tools):
+    async def generate(self, *, system, messages, tools, idempotency_key=None):
         params: dict = {
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -128,6 +132,15 @@ class AnthropicModel(Model):
                 schemas[-1] = {**schemas[-1], "cache_control": {"type": "ephemeral"}}
             params["tools"] = schemas
         params.update(self.kwargs)
+
+        # Request-level idempotency: if the process dies after the API call
+        # returns but before the decision is appended, a resumed run sends the
+        # same key and the provider returns the same response (within its
+        # idempotency window) instead of charging twice or diverging.
+        if idempotency_key:
+            headers = dict(params.get("extra_headers") or {})
+            headers["Idempotency-Key"] = idempotency_key
+            params["extra_headers"] = headers
 
         resp = await self.client.messages.create(**params)
 
@@ -219,7 +232,7 @@ class OpenAIModel(Model):
                 })
         return out
 
-    async def generate(self, *, system, messages, tools):
+    async def generate(self, *, system, messages, tools, idempotency_key=None):
         params: dict = {
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -228,6 +241,12 @@ class OpenAIModel(Model):
         if tools:
             params["tools"] = self._to_openai_tools([tool.to_schema() for tool in tools])
         params.update(self.kwargs)
+
+        # Request-level idempotency (see AnthropicModel.generate).
+        if idempotency_key:
+            headers = dict(params.get("extra_headers") or {})
+            headers["Idempotency-Key"] = idempotency_key
+            params["extra_headers"] = headers
 
         resp = await self.client.chat.completions.create(**params)
         message = resp.choices[0].message

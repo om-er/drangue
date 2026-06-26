@@ -26,7 +26,7 @@ class ScriptedModel(Model):
         self.steps = steps
         self.i = 0
 
-    async def generate(self, *, system, messages, tools):
+    async def generate(self, *, system, messages, tools, idempotency_key=None):
         resp = self.steps[self.i]
         self.i += 1
         return resp

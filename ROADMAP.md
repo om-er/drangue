@@ -277,3 +277,26 @@ pauses and resumes on.
 - **Feature creep erodes the wedge.** Mitigate by wiring every default
   (in-memory store, no-op tracer, auto-approve) so the 3-line agent never has to
   know the production seams exist.
+
+## Known limitations and follow-ups
+
+From code review. None are blockers; they are the gap between "green in tests"
+and the production-grade durability the docstrings advertise.
+
+- **Serial sibling tool calls.** When a model requests several tools in one
+  decision, the orchestrator returns them one ToolStep at a time, so they run
+  sequentially. Parallelizing siblings is the obvious async win left, but it
+  interacts with per-tool guardrails and assisted-mode pauses (some siblings may
+  need approval while others run), so it needs care. Deterministic seq assignment
+  by tool-call order makes it tractable. Not yet done.
+- **Model-call exactly-once: addressed.** A request-level idempotency key
+  (`f"{run_id}:{step.seq}"`) is now threaded into `model.generate`, so a crash
+  between the API call returning and the decision being appended no longer
+  double-charges or diverges on resume, within the provider's idempotency window.
+- **Sync-tool timeouts bound the caller, not the work.** `wait_for` cannot cancel
+  a worker thread, so a timed-out sync tool keeps running and a retry can run
+  concurrently with it. Documented in `hardening.py`. Truly bounded execution
+  needs a cancellable async tool or an out-of-process worker.
+- **Budgets are a soft ceiling.** Enforcement reads recorded usage, so the step
+  that crosses the limit still runs; the next one is refused. Overshoot is bounded
+  by one model call. Documented in `budget.py`.
