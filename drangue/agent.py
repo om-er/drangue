@@ -54,7 +54,8 @@ class Agent:
     def __init__(self, model: t.Any = None, tools: list | None = None,
                  instructions: str = "", *, max_steps: int = 20,
                  max_tokens: int = 4096, store=None, engine=None, tracer=None,
-                 router=None, budget=None, guardrails=None, autonomy=None):
+                 router=None, budget=None, guardrails=None, autonomy=None,
+                 memory=None):
         self.router = self._resolve_router(model, router, max_tokens)
         self.tools: dict[str, Tool] = {}
         for obj in tools or []:
@@ -67,6 +68,7 @@ class Agent:
         self.budget = budget
         self.guardrails = guardrails
         self.autonomy = autonomy
+        self.memory = memory
         self.orchestrator = Orchestrator(max_steps=max_steps)
         self.executor = Executor(self.router, self.tools, guardrails=guardrails)
 
@@ -89,12 +91,18 @@ class Agent:
             run_id=rid, orchestrator=self.orchestrator, executor=self.executor,
             store=self.store, system=self.instructions, input=input or "",
             tracer=self._tracer_for(trace), budget=self.budget,
-            autonomy=self.autonomy,
+            autonomy=self.autonomy, memory=self.memory,
         )
 
     async def resume(self, run_id: str, *, trace: bool = False) -> Result:
         """Resume a run (e.g. after an approval). Alias for run with a run_id."""
         return await self.run(run_id=run_id, trace=trace)
+
+    async def remember(self, item) -> None:
+        """Write to long-term memory. Deliberate, not automatic: store what is
+        worth recalling later, not every run."""
+        if self.memory is not None:
+            await self.memory.remember(item)
 
     async def pending_approvals(self, run_id: str) -> list:
         """Actions awaiting a human decision, each with the agent's reasoning."""
@@ -136,6 +144,7 @@ class Agent:
                     executor=self.executor, store=self.store,
                     system=self.instructions, input=input, emit=emit,
                     tracer=tracer, budget=self.budget, autonomy=self.autonomy,
+                    memory=self.memory,
                 )
             finally:
                 await queue.put(sentinel)

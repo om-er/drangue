@@ -48,6 +48,8 @@ class State:
     output: str = ""
     next_seq: int = 0
     model_calls: int = 0
+    recalled: list = field(default_factory=list)    # recalled memory items (dicts)
+    recalled_done: bool = False                      # has a recall step happened?
 
 
 def fold(events: list) -> State:
@@ -59,11 +61,16 @@ def fold(events: list) -> State:
     output = ""
     next_seq = 0
     model_calls = 0
+    recalled: list = []
+    recalled_done = False
 
     for e in events:
         next_seq = e.seq + 1
         if e.type == "run_started":
             messages.append({"role": "user", "content": e.payload["input"]})
+        elif e.type == "memory_recalled":
+            recalled = e.payload.get("items", [])
+            recalled_done = True
         elif e.type == "model_decision":
             model_calls += 1
             text = e.payload.get("text", "")
@@ -103,6 +110,8 @@ def fold(events: list) -> State:
         output=output,
         next_seq=next_seq,
         model_calls=model_calls,
+        recalled=recalled,
+        recalled_done=recalled_done,
     )
 
 

@@ -16,13 +16,23 @@ from __future__ import annotations
 
 from .. import rollout
 from ..events import Event, Result
+from ..memory import item_to_dict, render_context
 from ..observability import NullTracer
 from ..orchestrator import Done, ModelStep, ToolStep, fold
 
 
+def _compose_system(system: str, recalled: list) -> str:
+    """Append recalled memory (a recorded fact) to the system context."""
+    context = render_context(recalled)
+    if not context:
+        return system
+    return f"{system}\n\n{context}" if system else context
+
+
 class EventSourcedEngine:
     async def run(self, *, run_id, orchestrator, executor, store, system, input,
-                  emit=None, tracer=None, budget=None, autonomy=None) -> Result:
+                  emit=None, tracer=None, budget=None, autonomy=None,
+                  memory=None) -> Result:
         tracer = tracer or NullTracer()
 
         with tracer.span("run", run_id=run_id) as run_span:
@@ -49,6 +59,19 @@ class EventSourcedEngine:
             while True:
                 events = await store.load(run_id)
                 state = fold(events)
+
+                # Recall once, before the first model step. The result is
+                # recorded, so a resumed run replays it instead of re-querying,
+                # and the orchestrator stays a pure function of the log.
+                if memory is not None and not state.recalled_done:
+                    items = await memory.recall(input)
+                    recalled = Event(seq=state.next_seq, type="memory_recalled",
+                                     payload={"items": [item_to_dict(i) for i in items]})
+                    await store.append(run_id, recalled)
+                    if emit:
+                        await emit(recalled)
+                    continue
+
                 step = orchestrator.next(state)
 
                 # Enforce the budget before an expensive (model) step, using the
@@ -85,8 +108,8 @@ class EventSourcedEngine:
                 if recorded is None:
                     key = f"{run_id}:{step.seq}"
                     produced = await executor.run(
-                        step, system=system, messages=state.messages,
-                        idempotency_key=key, tracer=tracer,
+                        step, system=_compose_system(system, state.recalled),
+                        messages=state.messages, idempotency_key=key, tracer=tracer,
                     )
                     await store.append(run_id, produced)
                     if emit:

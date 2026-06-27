@@ -11,9 +11,13 @@ drangue keeps the three kinds of state the book separates, by lifetime:
     explicit staleness policy, because the world now is more authoritative than
     your record of the world then. Current evidence wins when they conflict.
 
-This module is the seam only. The default is NullMemory: many production agents
-need no long-term memory, and "remember everything" is mostly noise. Wiring
-retrieval into the loop, scoped to specific high-value queries, comes later.
+Recall is wired into the loop: when an Agent is given a memory, the engine
+recalls against the run input before the first model step, records the result as
+a `memory_recalled` event (so a resumed run replays it instead of re-querying),
+and injects it into the model's system context. Writing is deliberate, not
+automatic: call `Agent.remember(item)` when a run produces something worth
+keeping. Auto-remembering every run is the "remember everything" anti-pattern the
+chapter warns against. The default is NullMemory; many agents need none.
 """
 
 from __future__ import annotations
@@ -29,6 +33,19 @@ class MemoryItem:
     # Staleness contract: when this fact should stop being trusted without
     # re-verification. None means it does not expire on its own.
     expires_at: float | None = None
+
+
+def item_to_dict(item: MemoryItem) -> dict:
+    return {"key": item.key, "value": item.value, "expires_at": item.expires_at}
+
+
+def render_context(items: list[dict]) -> str:
+    """Render recalled items for injection into the model's system context."""
+    if not items:
+        return ""
+    lines = "\n".join(f"- {it.get('value', '')}" for it in items)
+    return ("Relevant prior context (may be stale; current evidence wins over "
+            "memory):\n" + lines)
 
 
 class Memory(t.Protocol):

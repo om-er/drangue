@@ -20,6 +20,7 @@ MODULES = [
     "tests.test_security",
     "tests.test_rollout",
     "tests.test_evals",
+    "tests.test_memory",
 ]
 
 
