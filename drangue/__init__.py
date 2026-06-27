@@ -39,7 +39,9 @@ from .guardrails import Guardrails
 from .hardening import ToolPolicy
 from .memory import Memory, MemoryItem, NullMemory
 from .models import AnthropicModel, Model, ModelResponse, OpenAIModel, ToolCall
+from .context import RunContext, RunSpec
 from .observability import ConsoleTracer, NullTracer, OTelTracer, Tracer
+from .registry import AgentRegistry, context_from_spec
 from .rollout import Autonomy
 from .routing import RuleRouter, Router, SingleModel
 from .store import InMemoryStore, SQLiteStore, Store
@@ -77,6 +79,10 @@ __all__ = [
     "Memory",
     "MemoryItem",
     "NullMemory",
+    "RunContext",
+    "RunSpec",
+    "AgentRegistry",
+    "context_from_spec",
     "Budget",
     "Router",
     "SingleModel",

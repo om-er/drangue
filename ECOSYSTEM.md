@@ -116,20 +116,33 @@ That was the only core change needed to unlock Tier 2 memory. Everything else
 Drift detection, notably, needs **no** core change: it is a pure consumer of the
 persisted event log and traces the core already emits.
 
-## Suggested package layout
+## Repository layout: a monorepo
+
+First-party packages live in one repository, but each is a separate,
+independently published package, not a submodule of core. Crucially,
+`extensions/` is a sibling of the core package directory, not under it, so
+nothing is importable as `drangue.extensions` and no extension's dependency ever
+reaches core.
 
 ```
-drangue/                  # Tier 0: core. The loop + seams + defaults.
-drangue-postgres/         # Tier 1: Store
-drangue-redis/            # Tier 1: Store
-drangue-temporal/         # Tier 2: Engine
-drangue-memory/           # Tier 2: Memory (pairs with the core hook above)
-drangue-drift/            # Tier 2: reads the log/traces; no seam needed
-drangue-langfuse/         # Tier 2: Tracer
-drangue-contrib/          # Tier 3: monorepo of toolpacks, guards, check packs
+drangue/                         # repo root (monorepo)
+  drangue/                       # Tier 0: core package (zero runtime deps)
+  tests/                         # core tests
+  pyproject.toml                 # core
+  extensions/
+    run_tests.py                 # runs every extension's tests in one place
+    drangue-memory/              # Tier 2: Memory   -> import drangue_memory
+      drangue_memory/  tests/  pyproject.toml
+    drangue-postgres/            # Tier 1: Store    -> import drangue_postgres
+    drangue-temporal/            # Tier 2: Engine
 ```
 
-Each is its own package with its own `pyproject.toml`, pinning `drangue>=X,<Y`.
+Each extension has its own `pyproject.toml` pinning `drangue>=X,<Y` and is
+published to PyPI on its own (`pip install drangue-postgres`). Keeping them in
+one repo buys atomic cross-cutting changes (a battery that needs a seam change is
+a single commit, as the RunSpec work was) and one CI, without giving up the
+dependency boundary. Tier 3 community packages stay in their own repos,
+discoverable via a list.
 
 ## Conformance tests: SHIPPED
 
@@ -164,6 +177,36 @@ core-team review of every package.
 - **A multi-agent orchestrator.** Chapter 13 is a deliberate non-goal. Compose
   `Agent`s yourself if a measured case proves separateness earns its cost.
 - **A hosted platform inside the library.** That is Tier 4, a separate product.
+
+## Distributed engines: the construction seam (resolved)
+
+Building the first batteries tested the seams. Memory (`drangue-memory`) and
+Store (`drangue-postgres`) fit cleanly, and the Engine seam accepts in-process
+engines (`check_engine` passes for `EventSourcedEngine`).
+
+Building `drangue-temporal` surfaced that a distributed runtime could not get a
+`RunContext` on a remote worker: `Engine.run(ctx)` takes live, in-process objects
+(the executor with its model client and tool callables), which cannot cross a
+wire. `Engine.run(ctx)` itself was fine; the missing piece was a serializable way
+to *reconstruct* the context on the worker.
+
+That is now in core:
+
+- **`RunSpec`** (serializable: `key`, `run_id`, `input`) is what crosses the
+  boundary, with `to_dict` / `from_dict`.
+- **`AgentRegistry`** lives on the worker and maps a key to a factory that
+  rebuilds the live agent (model, tools, guardrails, memory) locally.
+- **`context_from_spec(spec, registry)`** is the worker-side reconstruction: it
+  builds a `RunContext` the same engine then drives.
+
+So `Engine.run(ctx)` stays the single contract; a distributed engine just builds
+its `ctx` from a `RunSpec` after the spec arrives. The orchestrator's determinism
+rules (no clock/random/IO) already match workflow-engine determinism, so a
+Temporal engine is now implementable: the workflow receives a `RunSpec`, rebuilds
+via the registry, runs the orchestrator as workflow code, and runs executor steps
+as activities. Proven offline by `tests/test_distributed.py`, which JSON
+round-trips a spec, rebuilds on a simulated worker, and resumes from a shared
+store without re-calling the model. See `drangue-temporal/README.md`.
 
 ## Versioning and stability
 

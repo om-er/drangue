@@ -23,6 +23,7 @@ MODULES = [
     "tests.test_memory",
     "tests.test_conformance",
     "tests.test_integration",
+    "tests.test_distributed",
 ]
 
 
