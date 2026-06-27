@@ -12,6 +12,7 @@ run under pytest, drangue's own runner, or a plain script.
 """
 
 from .conformance import (
+    check_engine,
     check_memory,
     check_model_interface,
     check_router,
@@ -28,6 +29,7 @@ __all__ = [
     "check_store",
     "check_store_idempotent_append",
     "check_store_with_agent",
+    "check_engine",
     "check_memory",
     "check_tracer",
     "check_router",

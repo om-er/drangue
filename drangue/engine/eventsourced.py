@@ -32,10 +32,18 @@ def _compose_system(system: str, recalled: list) -> str:
 
 
 class EventSourcedEngine:
-    async def run(self, *, run_id, orchestrator, executor, store, system, input,
-                  emit=None, tracer=None, budget=None, autonomy=None,
-                  memory=None) -> Result:
-        tracer = tracer or NullTracer()
+    async def run(self, ctx) -> Result:
+        run_id = ctx.run_id
+        orchestrator = ctx.orchestrator
+        executor = ctx.executor
+        store = ctx.store
+        system = ctx.system
+        input = ctx.input
+        emit = ctx.emit
+        budget = ctx.budget
+        autonomy = ctx.autonomy
+        memory = ctx.memory
+        tracer = ctx.tracer or NullTracer()
 
         with tracer.span("run", run_id=run_id) as run_span:
             if not await store.load(run_id):

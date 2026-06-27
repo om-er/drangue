@@ -12,7 +12,9 @@ import typing as t
 
 
 class Engine(t.Protocol):
-    async def run(self, *, run_id, orchestrator, executor, store, system, input, emit=None): ...
+    # Takes a RunContext (drangue.context). A single argument keeps this seam
+    # stable as capabilities are added as context fields.
+    async def run(self, ctx): ...
 
 
 from .eventsourced import EventSourcedEngine  # noqa: E402

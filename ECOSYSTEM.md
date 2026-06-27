@@ -39,7 +39,7 @@ battery is always strictly additive.
 |---|---|---|---|---|
 | **Model** | `async generate(...)` | `AnthropicModel`, `OpenAIModel` | Bedrock, Vertex, Gemini-native, Ollama-native | 1 |
 | **Store** | `async append/load` | `InMemoryStore`, `SQLiteStore` | Postgres, Redis, DynamoDB | 1 |
-| **Engine** | `async run(...)` | `EventSourcedEngine` | Temporal, DBOS, Restate adapters | 2 |
+| **Engine** | `async run(ctx)` | `EventSourcedEngine` | Temporal, DBOS, Restate adapters | 2 |
 | **Tracer** | `span(name, /, **attrs)` | `NullTracer`, `ConsoleTracer`, `OTelTracer` | Langfuse, Phoenix, Braintrust exporters | 1-2 |
 | **Memory** | `async recall/remember` | `NullMemory` | pgvector memory, Redis memory | 2 (needs core hook, below) |
 | **Router** | `choose(messages, step_index)` | `SingleModel`, `RuleRouter` | cost-aware router, latency router | 2 |

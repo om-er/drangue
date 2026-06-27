@@ -92,6 +92,46 @@ async def check_store_with_agent(make_store) -> None:
         "a completed run must replay from the store without re-calling the model"
 
 
+# --- Engine --------------------------------------------------------------
+
+async def check_engine(make_engine) -> None:
+    """Engine contract: drive a run to completion and resume by replay.
+
+    Builds a RunContext with an in-memory store and a fake model, so an
+    alternative engine (Temporal, DBOS, ...) can verify it honors the core
+    promises: complete a simple run, record run_started..run_finished, and on a
+    second run with the same id replay from the store without re-calling the model.
+    """
+    from ..context import RunContext
+    from ..executor import Executor
+    from ..orchestrator import Orchestrator
+    from ..routing import SingleModel
+    from ..store import InMemoryStore
+
+    model = FakeModel(final="done")
+    store = InMemoryStore()
+    executor = Executor(SingleModel(model), {})
+    orchestrator = Orchestrator()
+    engine = make_engine()
+
+    def ctx(run_id):
+        return RunContext(run_id=run_id, input="hi", orchestrator=orchestrator,
+                          executor=executor, store=store, system="")
+
+    result = await engine.run(ctx("smoke"))
+    assert result.status == "completed", "engine must complete a simple run"
+    assert result.output == "done"
+    types = [e.type for e in result.events]
+    assert types[0] == "run_started" and types[-1] == "run_finished", \
+        "engine must record run_started ... run_finished"
+
+    calls = model.calls
+    again = await engine.run(ctx("smoke"))
+    assert again.output == "done", "a completed run must reload from the store"
+    assert model.calls == calls, \
+        "a completed run must replay without re-calling the model"
+
+
 # --- Memory --------------------------------------------------------------
 
 async def check_memory(make_memory) -> None:

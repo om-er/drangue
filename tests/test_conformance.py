@@ -16,9 +16,11 @@ from drangue import (
     SingleModel,
     SQLiteStore,
 )
+from drangue import EventSourcedEngine
 from drangue.testing import (
     FakeModel,
     RecordingTracer,
+    check_engine,
     check_memory,
     check_model_interface,
     check_router,
@@ -50,6 +52,10 @@ async def test_sqlite_store_conforms():
         for p in paths:
             if os.path.exists(p):
                 os.remove(p)
+
+
+async def test_event_sourced_engine_conforms():
+    await check_engine(EventSourcedEngine)
 
 
 async def test_null_memory_conforms():

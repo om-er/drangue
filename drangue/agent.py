@@ -18,6 +18,7 @@ import typing as t
 import uuid
 
 from . import rollout
+from .context import RunContext
 from .engine import EventSourcedEngine
 from .events import Event, Result
 from .executor import Executor
@@ -83,16 +84,25 @@ class Agent:
     def _tracer_for(self, trace: bool):
         return ConsoleTracer() if trace else self.tracer
 
+    def _context(self, input, run_id, *, trace=False, emit=None) -> RunContext:
+        return RunContext(
+            run_id=run_id or _new_run_id(),
+            input=input or "",
+            orchestrator=self.orchestrator,
+            executor=self.executor,
+            store=self.store,
+            system=self.instructions,
+            tracer=self._tracer_for(trace),
+            emit=emit,
+            budget=self.budget,
+            autonomy=self.autonomy,
+            memory=self.memory,
+        )
+
     async def run(self, input: str | None = None, *, run_id: str | None = None,
                   trace: bool = False) -> Result:
         """Run to completion, or resume a paused/crashed run by run_id."""
-        rid = run_id or _new_run_id()
-        return await self.engine.run(
-            run_id=rid, orchestrator=self.orchestrator, executor=self.executor,
-            store=self.store, system=self.instructions, input=input or "",
-            tracer=self._tracer_for(trace), budget=self.budget,
-            autonomy=self.autonomy, memory=self.memory,
-        )
+        return await self.engine.run(self._context(input, run_id, trace=trace))
 
     async def resume(self, run_id: str, *, trace: bool = False) -> Result:
         """Resume a run (e.g. after an approval). Alias for run with a run_id."""
@@ -126,26 +136,20 @@ class Agent:
             seq=rollout.next_seq(events), type="approval_denied",
             payload={"call_id": cid, "reason": reason}))
 
-    async def stream(self, input: str, *, run_id: str | None = None,
+    async def stream(self, input: str | None = None, *, run_id: str | None = None,
                      trace: bool = False) -> t.AsyncIterator[Event]:
         """Yield each Event as it is appended to the log."""
-        rid = run_id or _new_run_id()
-        tracer = self._tracer_for(trace)
         queue: asyncio.Queue = asyncio.Queue()
         sentinel = object()
 
         async def emit(ev: Event) -> None:
             await queue.put(ev)
 
+        ctx = self._context(input, run_id, trace=trace, emit=emit)
+
         async def driver():
             try:
-                return await self.engine.run(
-                    run_id=rid, orchestrator=self.orchestrator,
-                    executor=self.executor, store=self.store,
-                    system=self.instructions, input=input, emit=emit,
-                    tracer=tracer, budget=self.budget, autonomy=self.autonomy,
-                    memory=self.memory,
-                )
+                return await self.engine.run(ctx)
             finally:
                 await queue.put(sentinel)
 

@@ -14,6 +14,11 @@ Caveat: this is a soft ceiling, not a hard one. `exceeded` only sees usage that
 is already recorded, so the step that pushes a run over the limit still runs; the
 budget stops the NEXT step. Overshoot is bounded by one model call. For a hard
 ceiling you would pre-estimate the next step's cost before allowing it.
+
+The budget gates model steps, not tools. A pending tool call still runs when the
+run is already over budget (finish in-flight work; tools are cheap and do not
+consume model tokens). It is the next model step that is refused, so "budget
+exhausted" does not interrupt tool side effects mid-flight.
 """
 
 from __future__ import annotations
