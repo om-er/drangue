@@ -131,13 +131,29 @@ drangue-contrib/          # Tier 3: monorepo of toolpacks, guards, check packs
 
 Each is its own package with its own `pyproject.toml`, pinning `drangue>=X,<Y`.
 
-## Conformance tests
+## Conformance tests: SHIPPED
 
-The core publishes a `drangue.testing` module: a protocol-level test suite plus
-the offline fakes already used internally. A battery author runs their `Store`
-(or `Model`, `Engine`, ...) against it and proves the contract holds, the same
-way `tests/test_durability.py` already exercises `SQLiteStore`. This is what lets
-Tier 3 stay trustworthy without core-team review of every package.
+The core publishes `drangue.testing`: a conformance suite per seam plus the
+offline fakes (`FakeModel`, `RecordingTracer`). A battery author runs the check
+for their seam and proves the contract holds. The checks are plain async
+functions (no test-framework dependency), so they run under pytest, drangue's
+own runner, or a script.
+
+```python
+from drangue.testing import check_store, check_store_idempotent_append
+
+async def test_my_postgres_store_conforms():
+    await check_store(lambda: PostgresStore(dsn))                 # required core
+    await check_store_idempotent_append(lambda: PostgresStore(dsn))  # durable promise
+    await check_store_with_agent(lambda: PostgresStore(dsn))      # end-to-end
+```
+
+Available checks: `check_store`, `check_store_idempotent_append`,
+`check_store_with_agent`, `check_memory`, `check_tracer`, `check_router`,
+`check_model_interface`. drangue's own built-ins are tested through these same
+suites (`tests/test_conformance.py`), so the contract a battery is held to is the
+exact contract the core meets. This is what lets Tier 3 stay trustworthy without
+core-team review of every package.
 
 ## What stays out, on purpose, forever
 
