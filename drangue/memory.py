@@ -18,6 +18,21 @@ and injects it into the model's system context. Writing is deliberate, not
 automatic: call `Agent.remember(item)` when a run produces something worth
 keeping. Auto-remembering every run is the "remember everything" anti-pattern the
 chapter warns against. The default is NullMemory; many agents need none.
+
+Expiry is enforced at recall time, not render time. The engine stamps a
+`recalled_at` timestamp into the event and drops any item whose `expires_at` has
+passed as of that recorded moment, before the event is written. That keeps the
+check deterministic (a wall-clock test in rendering would make a fact appear on
+the first run and vanish on resume) and means a stale fact never reaches the
+prompt. A failing recall (a down vector DB) is non-fatal: the engine records an
+empty `memory_recalled` and the run proceeds without memory, so an enhancement
+never crashes the investigation. A Memory implementation owns its own
+timeout/retry internally if it wants them.
+
+Two deliberate simplifications: recall fires once, against the raw run input,
+before the first model step (no mid-run recall yet; that would need per-recall
+tracking rather than the single `recalled_done` flag), and recall is not counted
+against the token budget.
 """
 
 from __future__ import annotations
@@ -37,6 +52,15 @@ class MemoryItem:
 
 def item_to_dict(item: MemoryItem) -> dict:
     return {"key": item.key, "value": item.value, "expires_at": item.expires_at}
+
+
+def live_items(items: list, now: float) -> list:
+    """Drop items whose staleness window has passed as of `now`.
+
+    Called once at recall time against a recorded timestamp, so the result is a
+    fact in the log and replay stays deterministic.
+    """
+    return [i for i in items if i.expires_at is None or i.expires_at > now]
 
 
 def render_context(items: list[dict]) -> str:

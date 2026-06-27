@@ -85,6 +85,44 @@ async def test_remember_is_explicit():
     assert mem.remembered[0].value == "root cause: bad index"
 
 
+async def test_expired_memory_is_dropped_at_recall():
+    mem = FakeMemory([
+        MemoryItem(key="fresh", value="still good"),            # no expiry
+        MemoryItem(key="stale", value="old news", expires_at=1.0),  # long past
+    ])
+    model = SystemCapturingModel()
+    agent = Agent(model=model, tools=[search], memory=mem)
+
+    result = await agent.run("q", run_id="r")
+
+    assert "still good" in model.systems[0]
+    assert "old news" not in model.systems[0]          # the stale item never reached the prompt
+    recalled = [e for e in result.events if e.type == "memory_recalled"][0]
+    assert [i["key"] for i in recalled.payload["items"]] == ["fresh"]
+    assert "recalled_at" in recalled.payload           # the timestamp is recorded for replay
+
+
+async def test_recall_failure_is_not_fatal():
+    class FailingMemory(Memory):
+        async def recall(self, query, *, limit=5):
+            raise RuntimeError("vector db down")
+
+        async def remember(self, item):
+            return None
+
+    model = SystemCapturingModel()
+    agent = Agent(model=model, tools=[search], memory=FailingMemory())
+
+    result = await agent.run("q", run_id="r")
+
+    assert result.status == "completed"                # the run still finishes
+    assert result.output == "done"
+    recalled = [e for e in result.events if e.type == "memory_recalled"][0]
+    assert recalled.payload["items"] == []
+    assert "error" in recalled.payload                 # the failure is recorded, not silent
+    assert model.systems[0] == ""                      # nothing injected
+
+
 async def test_null_memory_recalls_nothing_and_leaves_system_unchanged():
     model = SystemCapturingModel()
     agent = Agent(model=model, tools=[search], instructions="base", memory=NullMemory())

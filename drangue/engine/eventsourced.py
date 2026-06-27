@@ -14,9 +14,11 @@ survives process death and resumes exactly.
 
 from __future__ import annotations
 
+import time
+
 from .. import rollout
 from ..events import Event, Result
-from ..memory import item_to_dict, render_context
+from ..memory import item_to_dict, live_items, render_context
 from ..observability import NullTracer
 from ..orchestrator import Done, ModelStep, ToolStep, fold
 
@@ -62,11 +64,24 @@ class EventSourcedEngine:
 
                 # Recall once, before the first model step. The result is
                 # recorded, so a resumed run replays it instead of re-querying,
-                # and the orchestrator stays a pure function of the log.
+                # and the orchestrator stays a pure function of the log. Expiry is
+                # honored here against a recorded timestamp; a failing recall is
+                # non-fatal (record empty and proceed without memory).
                 if memory is not None and not state.recalled_done:
-                    items = await memory.recall(input)
+                    now = time.time()
+                    error = None
+                    try:
+                        items = await memory.recall(input)
+                    except Exception as exc:  # an enhancement must never crash the run
+                        items, error = [], str(exc)
+                    payload = {
+                        "items": [item_to_dict(i) for i in live_items(items, now)],
+                        "recalled_at": now,
+                    }
+                    if error is not None:
+                        payload["error"] = error
                     recalled = Event(seq=state.next_seq, type="memory_recalled",
-                                     payload={"items": [item_to_dict(i) for i in items]})
+                                     payload=payload)
                     await store.append(run_id, recalled)
                     if emit:
                         await emit(recalled)
