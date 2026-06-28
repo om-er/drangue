@@ -20,17 +20,18 @@ pip install "drangue[anthropic]"  # Claude
 from drangue import Agent, tool
 
 @tool
-def get_weather(city: str) -> str:
-    """Get the current weather for a city."""
-    return f"{city}: 72F and sunny"
+def error_rate(service: str) -> str:
+    """Return the recent 5xx error rate and p99 latency for a service."""
+    # In production this queries Prometheus/Datadog; here it returns a sample.
+    return f"{service}: 4.2% 5xx over 15m (baseline 0.3%), p99 latency 1.8s"
 
 agent = Agent(
     model="claude-opus-4-8",
-    tools=[get_weather],
-    instructions="You are a helpful weather assistant.",
+    tools=[error_rate],
+    instructions="You are an on-call assistant. Be concise and specific.",
 )
 
-result = agent.run_sync("What should I wear in Paris today?")
+result = agent.run_sync("Is the checkout service healthy right now?")
 print(result.output)
 ```
 
@@ -42,7 +43,7 @@ The core is async. `run_sync` is the convenience wrapper for scripts; inside
 async code you `await` instead:
 
 ```python
-result = await agent.run("What should I wear in Paris today?")
+result = await agent.run("Is the checkout service healthy right now?")
 ```
 
 ## See every step
@@ -50,13 +51,13 @@ result = await agent.run("What should I wear in Paris today?")
 Inspection is one flag, not a separate service:
 
 ```python
-result = agent.run_sync("What should I wear in Paris today?", trace=True)
+result = agent.run_sync("Is the checkout service healthy right now?", trace=True)
 ```
 
 ```
-* tool   get_weather(city='Paris')
-       -> Paris: 72F and sunny
-* model  It is 72F and sunny in Paris, so light layers are perfect.
+* tool   error_rate(service='checkout')
+       -> checkout: 4.2% 5xx over 15m (baseline 0.3%), p99 latency 1.8s
+* model  checkout is unhealthy: 4.2% 5xx is 14x the 0.3% baseline, p99 at 1.8s. Worth paging.
 ```
 
 `result.usage` reports the token totals for the run, and `result.events` is the
@@ -67,7 +68,7 @@ full event log the run was driven from.
 `stream` yields each event as it is appended to the log, so you stay in control:
 
 ```python
-async for event in agent.stream("What is the weather in Tokyo?"):
+async for event in agent.stream("Is the orders service healthy?"):
     if event.type == "model_decision":
         for call in event.payload["tool_calls"]:
             print("calling", call["name"], call["arguments"])
