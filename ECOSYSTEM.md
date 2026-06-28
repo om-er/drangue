@@ -200,13 +200,17 @@ That is now in core:
   builds a `RunContext` the same engine then drives.
 
 So `Engine.run(ctx)` stays the single contract; a distributed engine just builds
-its `ctx` from a `RunSpec` after the spec arrives. The orchestrator's determinism
-rules (no clock/random/IO) already match workflow-engine determinism, so a
-Temporal engine is now implementable: the workflow receives a `RunSpec`, rebuilds
-via the registry, runs the orchestrator as workflow code, and runs executor steps
-as activities. Proven offline by `tests/test_distributed.py`, which JSON
-round-trips a spec, rebuilds on a simulated worker, and resumes from a shared
-store without re-calling the model. See `drangue-temporal/README.md`.
+its `ctx` from a `RunSpec` after the spec arrives. Proven offline by
+`tests/test_distributed.py`, which JSON round-trips a spec, rebuilds on a
+simulated worker, and resumes from a shared store without re-calling the model.
+
+`extensions/drangue-temporal` is the real, **verified** engine built on this:
+Temporal supervises the durable engine (a workflow drives the run, an activity
+rebuilds the agent via the registry and runs `EventSourcedEngine`), so every
+feature works unchanged and activity-retry composes with store-resume.
+Human-in-the-loop becomes a durable wait on an approval signal. Both paths
+(run-to-completion and pause-approve-resume) pass against Temporal's
+time-skipping test server. See `drangue-temporal/README.md`.
 
 ## Versioning and stability
 

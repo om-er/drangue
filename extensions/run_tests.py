@@ -40,7 +40,11 @@ def main() -> int:
         for fname in sorted(os.listdir(tests_dir)):
             if not (fname.startswith("test_") and fname.endswith(".py")):
                 continue
-            module = _load(os.path.join(tests_dir, fname))
+            try:
+                module = _load(os.path.join(tests_dir, fname))
+            except Exception as exc:  # e.g. an optional SDK is not installed
+                print(f"SKIP {name}::{fname} (cannot import: {exc!r})")
+                continue
             for attr in sorted(dir(module)):
                 if not attr.startswith("test_"):
                     continue

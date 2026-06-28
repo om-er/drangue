@@ -1,62 +1,56 @@
-# drangue-temporal (unblocked: the construction seam landed)
+# drangue-temporal
 
-Status: **implementable.** Building this battery found that a distributed runtime
-could not reconstruct a run on a remote worker; the core now provides the
-serializable construction path, so a Temporal engine can be built. The
-implementation still needs a Temporal dev server to verify, so it is not shipped
-here yet, but the blocker is gone.
+Run drangue agents on [Temporal](https://temporal.io). Implements the Engine seam
+by **supervising** the durable engine rather than replacing it: a workflow drives
+a run; the work happens in an activity that rebuilds the agent (via the `RunSpec`
+construction seam) and runs the in-process `EventSourcedEngine` against a shared
+durable store.
 
-## What was missing, and what landed
+## Why this shape
 
-The Engine seam is `async run(ctx)`, where `ctx` is a `RunContext` carrying
-**live, in-process objects** (the executor with its model client and tool
-callables). Those cannot cross a wire, and Temporal needs serializable workflow
-arguments with work running on pre-registered workers. `run(ctx)` itself was
-fine; the gap was getting a `ctx` on the worker.
+- **Feature-complete by reuse.** The activity runs the full engine, so budget,
+  autonomy, memory, and guardrails all work unchanged. A workflow that
+  reimplemented the loop would lose them.
+- **Retry composes with resume.** The activity is safe to retry: a retry resumes
+  from the store by `run_id` instead of redoing recorded steps. Temporal's
+  run-level retry/visibility sits on top of the engine's step-level durability.
+- **Human-in-the-loop is a durable wait.** When a run pauses for approval, the
+  workflow waits (possibly for days) on an `approve` signal, records the approval,
+  and re-runs the activity, which resumes past the gate.
 
-Core now provides the serializable construction path (in `drangue.context` and
-`drangue.registry`):
+## Usage
 
-- **`RunSpec`** (`key`, `run_id`, `input`) crosses the boundary.
-- **`AgentRegistry`** on the worker maps the key to a factory that rebuilds the
-  live agent locally.
-- **`context_from_spec(spec, registry)`** reconstructs the `RunContext`.
+```python
+from drangue import Agent, RunSpec, SQLiteStore
+from drangue_temporal import REGISTRY, build_worker, submit_run, approve
 
-The same `Engine.run(ctx)` then drives it. `tests/test_distributed.py` in core
-proves the round-trip: a spec is JSON-serialized, rebuilt on a simulated worker,
-run, and resumed from a shared store without re-calling the model.
+# On the worker: how to rebuild each agent. Point it at a SHARED durable store
+# (a real DB in production) so resume works across workers.
+REGISTRY.register("sre", lambda: Agent(
+    "claude-opus-4-8", tools=TOOLS, store=SQLiteStore("/shared/runs.db")))
 
-## How the Temporal engine looks now
+worker = build_worker(client, task_queue="drangue")   # then await worker.run()
 
-```
-@workflow.defn
-class AgentWorkflow:
-    @workflow.run
-    async def run(self, spec: RunSpec) -> Result:
-        # The orchestrator (pure) runs as deterministic workflow code.
-        # Each executor step runs as an activity:
-        while True:
-            step = orchestrator.next(state)          # deterministic -> safe in a workflow
-            if done: return result
-            ev = await workflow.execute_activity(run_step, spec, step)  # side effects
-            state = fold(state, ev)
-
-@activity.defn
-async def run_step(spec: RunSpec, step) -> Event:
-    agent = registry[spec.key]()      # reconstruct model + tools on the worker
-    return await agent.executor.run(step, ...)
+# Elsewhere: start a run, and approve it when a human signs off.
+await submit_run(client, RunSpec("sre", "inc-1", "investigate orders latency"),
+                 task_queue="drangue")
+await approve(client, "inc-1")
 ```
 
-Temporal's history is the durable log; our orchestrator's determinism rules (no
-clock/random/IO) line up exactly with Temporal's workflow determinism rules. The
-architecture is compatible and the construction seam now fits, so the only thing
-left is the implementation against a live Temporal server.
+The workflow body is trivially deterministic (it only schedules activities and
+waits on a signal); all non-determinism lives in the activity, where it belongs.
+That lines up with the orchestrator's own determinism rules, which is why this
+fits Temporal cleanly.
 
-## What this validates
+## Status: verified
 
-The Store and Memory seams accept batteries cleanly (`drangue-postgres`,
-`drangue-memory` both pass conformance). The Engine seam accepts in-process
-engines (`check_engine` passes for `EventSourcedEngine`), and the new
-RunSpec + registry path lets a distributed engine rebuild a run on a worker
-(proven offline in `tests/test_distributed.py`). Building this battery is what
-drove that core change: the seam grew because a real battery needed it.
+Both paths are tested against Temporal's time-skipping test server
+(`tests/test_temporal.py`): a run-to-completion, and a run that pauses on an
+assisted action, waits for the `approve` signal, and resumes to completion.
+
+```bash
+pip install temporalio
+DRANGUE_TEMPORAL_TEST=1 python extensions/run_tests.py   # from the repo root
+```
+
+Without `temporalio` and the flag, the suite skips cleanly.
