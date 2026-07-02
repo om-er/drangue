@@ -1,0 +1,39 @@
+{
+  "ORD-88412": {
+    "total_eur": 47.9,
+    "status": "delivered",
+    "items": ["wool scarf"],
+    "captures": [
+      {"amount_eur": 47.9, "ts": "2026-06-28T18:22:11Z", "card": "**4421"},
+      {"amount_eur": 47.9, "ts": "2026-06-28T18:33:40Z", "card": "**4421"}
+    ],
+    "delivery": {
+      "signed": false,
+      "events": [
+        {"ts": "2026-06-30T11:15:00Z", "event": "delivered to mailbox"}
+      ]
+    },
+    "customer": {"account_age_days": 1133, "prior_orders": 27, "chargebacks": 0},
+    "fraud_flags": []
+  },
+  "ORD-91277": {
+    "total_eur": 840.0,
+    "status": "delivered",
+    "items": ["espresso machine"],
+    "captures": [
+      {"amount_eur": 840.0, "ts": "2026-06-27T10:05:33Z", "card": "**7719"}
+    ],
+    "delivery": {
+      "signed": true,
+      "events": [
+        {"ts": "2026-06-29T14:02:00Z", "event": "delivered, signature on file"}
+      ]
+    },
+    "customer": {"account_age_days": 22, "prior_orders": 1, "chargebacks": 0},
+    "fraud_flags": [
+      "new_account",
+      "address_changed_after_purchase",
+      "high_value_first_category_purchase"
+    ]
+  }
+}
