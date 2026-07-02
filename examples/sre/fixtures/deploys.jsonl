@@ -1,0 +1,5 @@
+{"service": "web", "version": "v2026.06.30.2", "ts": "2026-07-01T16:40:00Z"}
+{"service": "orders", "version": "v2026.06.28.1", "ts": "2026-07-01T09:12:00Z"}
+{"service": "payments", "version": "v2026.06.25.4", "ts": "2026-06-30T11:03:00Z"}
+{"service": "orders", "version": "v2026.07.02.1", "ts": "2026-07-02T08:05:00Z"}
+{"service": "notifications", "version": "v2026.07.01.3", "ts": "2026-07-02T07:20:00Z"}
