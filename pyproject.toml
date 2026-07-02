@@ -4,13 +4,26 @@ build-backend = "hatchling.build"
 
 [project]
 name = "drangue"
-version = "0.0.1"
+version = "0.1.0"
 description = "A tiny, obvious agent runtime for Python. No graphs, no chains, no ceremony."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "drangue contributors" }]
+authors = [{ name = "Homer" }]
 keywords = ["agent", "llm", "ai", "tools", "claude", "anthropic", "openai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 # The core has zero dependencies. Install the adapter you want:
 #   pip install "drangue[openai]"     covers OpenAI, DeepSeek, Groq, Ollama, ...
 #   pip install "drangue[anthropic]"  covers Claude
@@ -24,6 +37,12 @@ dev = ["pytest>=7", "anthropic>=0.40", "openai>=1.0"]
 
 [project.urls]
 Homepage = "https://github.com/om-er/drangue"
+Repository = "https://github.com/om-er/drangue"
+Issues = "https://github.com/om-er/drangue/issues"
+Changelog = "https://github.com/om-er/drangue/releases"
 
 [tool.hatch.build.targets.wheel]
 packages = ["drangue"]
+
+[tool.hatch.build.targets.sdist]
+include = ["drangue", "tests", "run_tests.py", "README.md", "LICENSE"]

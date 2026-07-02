@@ -335,6 +335,9 @@ pip install -e ".[dev]"
 python run_tests.py     # no pytest needed; uses a tiny async runner
 ```
 
+Contributions are welcome under MIT with a DCO sign-off (`git commit -s`) —
+see `CONTRIBUTING.md`.
+
 ## License
 
 MIT

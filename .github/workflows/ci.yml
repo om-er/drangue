@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # The core's promise is zero runtime dependencies. This job holds it to
+  # that: no extras, no SDKs, just the package and its tests.
+  zero-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: python run_tests.py
+      - run: python extensions/run_tests.py
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: python run_tests.py
+      - run: python extensions/run_tests.py
+
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      # The offline demos are executable documentation; keep them green.
+      - run: PYTHONPATH=.:examples/sre python examples/sre/offline_demo.py
+      - run: PYTHONPATH=.:examples/refunds python examples/refunds/offline_demo.py
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+
+  # Contributions are accepted under MIT with a DCO sign-off (CONTRIBUTING.md).
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Every PR commit carries a Signed-off-by trailer
+        run: |
+          fail=0
+          for c in $(git rev-list ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}); do
+            if ! git show -s --format=%B "$c" | grep -qi '^Signed-off-by: '; then
+              echo "::error::commit $c is missing Signed-off-by (use: git commit -s)"
+              fail=1
+            fi
+          done
+          exit $fail

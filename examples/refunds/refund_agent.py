@@ -1,10 +1,10 @@
 """A refund agent with a hard ceiling: settle small, escalate large.
 
-The policy manual's rule — refunds under €100 with clean evidence settle
-immediately, anything above or fraud-flagged needs a senior — expressed so
-that it is provable rather than hoped for: the cap lives in the tool body,
-the big-refund tool always pauses for approval, and every disposition is an
-event in a durable log.
+The policy manual's rule: refunds under €100 with clean evidence settle
+immediately, anything above or fraud-flagged needs a senior. Here it is
+expressed so that it is provable rather than hoped for: the cap lives in
+the tool body, the big-refund tool always pauses for approval, and every
+disposition is an event in a durable log.
 
 Live use needs an ANTHROPIC_API_KEY; the orders themselves come from
 fixtures/, so there is no other infrastructure. For a fully scripted run
@@ -30,7 +30,7 @@ fraud signals before deciding anything.
 
 Policy: refunds under €100 with clean evidence settle via refund_small.
 Anything at or above €100, or with any fraud flag, goes via refund, which a
-senior must approve — build the complete case in your reasoning (evidence,
+senior must approve: build the complete case in your reasoning (evidence,
 fraud markers, policy basis, and your recommendation, which may be to deny),
 because that case is what the approver reads. Never refund more than was
 captured. Be concise and specific."""

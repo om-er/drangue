@@ -9,6 +9,6 @@ covering index, turning point reads into scans.
 Remediation (reversible): restart the orders service, which restores its
 degraded state and rebuilds the index. Safe to repeat; low blast radius.
 
-Escalate instead if: payments is also degraded (provider slowness — do NOT
+Escalate instead if: payments is also degraded (provider slowness; do NOT
 restart payments; it makes the incident worse), or the spike predates the
 deploy by more than an hour.

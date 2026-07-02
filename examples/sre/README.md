@@ -3,17 +3,17 @@
 The companion agent to [*Production AI Agents*](https://www.llm-books.com/production-ai-agents)
 implements its own orchestrator, executor, guardrails, and rollout across ~15
 modules, one chapter at a time. This example is the same agent on drangue: the
-six tools carry the domain, and the runtime supplies everything else — the
+six tools carry the domain, and the runtime supplies everything else: the
 durable event log, the assisted-mode pause, and the audit trail.
 
 It is also the runnable form of a governed-agent story in five beats:
 
 1. **The incident** comes in.
-2. **The agent investigates** — metrics, logs, traces, deploy ledger, runbooks.
+2. **The agent investigates**: metrics, logs, traces, deploy ledger, runbooks.
 3. **It proposes a remediation and the run pauses, durably.** The approval
    request is an event in the log; it survives a process restart and can be
    decided days later from another process.
-4. **The approver sees the case, not a bare action** — the proposed call plus
+4. **The approver sees the case, not a bare action**: the proposed call plus
    the agent's reasoning.
 5. **The audit trail** replays the whole run from the log, decision included.
 
@@ -23,7 +23,7 @@ It is also the runnable form of a governed-agent story in five beats:
 PYTHONPATH=.:examples/sre python3 examples/sre/offline_demo.py
 ```
 
-A scripted `FakeModel` plays the model; everything else is real — the ported
+A scripted `FakeModel` plays the model; everything else is real: the ported
 tools reading `fixtures/`, the assisted pause, the SQLite log, the audit trail.
 
 ## Live, against the book's environment

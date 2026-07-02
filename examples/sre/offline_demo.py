@@ -1,7 +1,7 @@
 """The SRE approval flow, fully offline: no Docker, no API key.
 
 A scripted FakeModel plays the model's part with a plausible investigation, so
-what this demo actually exercises is everything else — the real ported tools
+what this demo actually exercises is everything else: the real ported tools
 (deploy ledger and runbooks from fixtures/), the real assisted-mode pause, a
 real SQLite event log, and the audit trail reconstructed from it.
 
@@ -80,7 +80,7 @@ async def main() -> None:
 
     print("\nFINAL:", result.output)
     print_audit(result)
-    print(f"\n(event log persisted at {db} — rerun with the same run_id and "
+    print(f"\n(event log persisted at {db}: rerun with the same run_id and "
           f"the recorded steps replay instead of re-executing)")
 
 

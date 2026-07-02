@@ -3,7 +3,7 @@
 The design decision that carries this example: there are TWO refund tools,
 and the boundary between them is an `if` statement, not a prompt.
 
-  - `refund_small` settles below the €100 cap autonomously — and refuses
+  - `refund_small` settles below the €100 cap autonomously, and refuses
     anything at or above it, or anything with fraud signals, in the tool
     body. A prompt-injected model asking it for €840 gets a refusal.
   - `refund` has no cap and never executes on its own: the Agent runs it in

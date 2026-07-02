@@ -1,17 +1,17 @@
 """The refund flow, fully offline: no API key, no infrastructure.
 
-A scripted FakeModel plays the model; everything else is real — the tools
+A scripted FakeModel plays the model; everything else is real: the tools
 reading fixtures/, the in-code €100 cap, the assisted pause, the SQLite
 event log, and the idempotent fake payment provider.
 
     python examples/refunds/offline_demo.py
 
 Three acts:
-  1. A clean €47.90 duplicate charge settles autonomously — then the same
+  1. A clean €47.90 duplicate charge settles autonomously, then the same
      run_id is run again, and the log replays instead of paying twice:
      the model is not re-called and the PSP ledger still has ONE refund.
   2. A fraud-flagged €840 claim: the model tries the small path (the tool
-     refuses — the cap is code), escalates to the gated path, the run
+     refuses: the cap is code), escalates to the gated path, the run
      pauses, and the approver REJECTS with a reason that enters the log.
   3. A prompt-injected ticket is blocked before the model ever sees it.
 """
@@ -85,7 +85,7 @@ SCRIPT_B = [
     ModelResponse(
         reasoning=("Claim is item-not-received on a delivered order with a signed "
                    "handoff (carrier scan 2026-06-29 14:02). Account is 22 days old, "
-                   "1 prior order, address changed after purchase — 3 fraud markers. "
+                   "1 prior order, address changed after purchase: 3 fraud markers. "
                    "Amount is 8x the autonomous cap and the small path refused it. "
                    "Policy requires senior review; evidence does NOT support "
                    "settlement. Recommend: deny and route to the fraud team, or "
@@ -110,7 +110,7 @@ def ledger_entries() -> list:
 
 async def act_one() -> None:
     print("=" * 72)
-    print("ACT 1 — the €47.90 duplicate charge: autonomous, and paid exactly once")
+    print("ACT 1: the €47.90 duplicate charge, autonomous, and paid exactly once")
     print("=" * 72)
     fake = FakeModel(SCRIPT_A)
     agent = build_agent(model=fake, store=SQLiteStore(str(_TMP / "runs.db")))
@@ -129,13 +129,13 @@ async def act_one() -> None:
     assert fake.calls == calls_after_first, "model was re-called on replay"
     assert len(ledger_entries()) == refunds_after_first == 1, "double refund!"
     print(f"\nre-ran run_id={run_id}: model calls {fake.calls} (unchanged), "
-          f"PSP ledger entries: {len(ledger_entries())} — money moved once.")
+          f"PSP ledger entries: {len(ledger_entries())}, money moved once.")
     print_audit(result)
 
 
 async def act_two() -> None:
     print("\n" + "=" * 72)
-    print("ACT 2 — the €840 claim: the cap holds, the run pauses, the human says no")
+    print("ACT 2: the €840 claim, where the cap holds, the run pauses, the human says no")
     print("=" * 72)
     agent = build_agent(model=FakeModel(SCRIPT_B),
                         store=SQLiteStore(str(_TMP / "runs.db")))
@@ -160,7 +160,7 @@ async def act_two() -> None:
 
 async def act_three() -> None:
     print("\n" + "=" * 72)
-    print("ACT 3 — the injected ticket: blocked before the model sees it")
+    print("ACT 3: the injected ticket, blocked before the model sees it")
     print("=" * 72)
     fake = FakeModel([])
     agent = build_agent(model=fake, store=SQLiteStore(str(_TMP / "runs.db")))
@@ -171,8 +171,8 @@ async def act_three() -> None:
     assert result.output.startswith("(blocked"), result.output
     assert fake.calls == 0, "the model must never see a blocked ticket"
     assert len(ledger_entries()) == 1, "no money may move on a blocked ticket"
-    print(f"model calls: {fake.calls}, PSP ledger entries: {len(ledger_entries())} "
-          f"— the model never saw the ticket, and no money moved.")
+    print(f"model calls: {fake.calls}, PSP ledger entries: {len(ledger_entries())}, "
+          f"so the model never saw the ticket, and no money moved.")
 
 
 async def main() -> None:
