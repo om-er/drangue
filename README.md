@@ -1,6 +1,6 @@
 # drangue
 
-A tiny, obvious agent runtime for Python.
+An agent runtime for Python.
 
 An agent is just a model plus tools. Running it is one call. No graphs, no
 chains, no base classes to inherit. You can read the whole loop in one sitting.
