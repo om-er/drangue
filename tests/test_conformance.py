@@ -37,18 +37,24 @@ async def test_in_memory_store_conforms():
 
 
 async def test_sqlite_store_conforms():
-    paths = []
+    paths, stores = [], []
 
     def make():
         path = os.path.join(tempfile.mkdtemp(), "conf.db")
         paths.append(path)
-        return SQLiteStore(path)
+        store = SQLiteStore(path)
+        stores.append(store)
+        return store
 
     try:
         await check_store(make)
         await check_store_idempotent_append(make)   # durable store promises this
         await check_store_with_agent(make)
     finally:
+        # A SQLiteStore holds its connection open for its lifetime, and Windows
+        # refuses to unlink a file that still has one. Close before removing.
+        for s in stores:
+            s.close()
         for p in paths:
             if os.path.exists(p):
                 os.remove(p)

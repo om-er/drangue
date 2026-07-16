@@ -21,13 +21,15 @@ from drangue.testing import FakeModel
 
 async def test_spec_crosses_boundary_rebuilds_and_runs():
     path = os.path.join(tempfile.mkdtemp(), "dist.db")
-    models = []
+    models, stores = [], []
 
     def build_greeter():
         model = FakeModel(final="hello from the worker")
         models.append(model)
         # The worker rebuilds the agent pointing at the shared durable store.
-        return Agent(model=model, tools=[], store=SQLiteStore(path))
+        store = SQLiteStore(path)
+        stores.append(store)
+        return Agent(model=model, tools=[], store=store)
 
     registry = AgentRegistry()
     registry.register("greeter", build_greeter)
@@ -54,6 +56,10 @@ async def test_spec_crosses_boundary_rebuilds_and_runs():
         assert result2.output == "hello from the worker"
         assert models[1].calls == 0     # replayed across the boundary, not re-run
     finally:
+        # Each rebuild opened its own connection to the shared file. Windows
+        # will not unlink it while any of them is still live.
+        for s in stores:
+            s.close()
         if os.path.exists(path):
             os.remove(path)
 

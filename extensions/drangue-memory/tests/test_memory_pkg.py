@@ -30,16 +30,22 @@ def _tmp():
 
 
 async def test_sqlite_memory_conforms():
-    paths = []
+    paths, mems = [], []
 
     def make():
         p = _tmp()
         paths.append(p)
-        return SqliteMemory(p)
+        mem = SqliteMemory(p)
+        mems.append(mem)
+        return mem
 
     try:
         await check_memory(make)
     finally:
+        # SqliteMemory holds its connection open, and Windows refuses to unlink
+        # a file that still has one. Close before removing.
+        for m in mems:
+            m.close()
         for p in paths:
             if os.path.exists(p):
                 os.remove(p)
