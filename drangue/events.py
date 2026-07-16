@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .budget import cost_from_events as _cost_from_events
 from .rollout import pending_approvals as _pending_approvals
 
 
@@ -74,6 +75,20 @@ class Result:
                 inp += u.get("input_tokens", 0)
                 out += u.get("output_tokens", 0)
         return {"input_tokens": inp, "output_tokens": out}
+
+    def cost(self, prices: dict, *, strict: bool = True) -> float:
+        """Total dollar cost of the run, given a price table.
+
+        A method rather than a property because cost is not knowable from the
+        log alone: prices vary by provider and change over time, so drangue
+        ships no table. Pass the same `prices` you give a Budget and the two
+        agree by construction — both compute from the recorded per-step model
+        and usage.
+
+        Raises if a step used a model the table does not cover; see
+        `budget.cost_from_events` for the reasoning and the strict=False escape.
+        """
+        return _cost_from_events(self.events, prices, strict=strict)
 
     @property
     def latency_ms(self) -> float:

@@ -86,11 +86,19 @@ from drangue import Agent, Budget
 
 agent = Agent("claude-opus-4-8", tools=tools, budget=Budget(max_tokens=200_000))
 # or a dollar budget with a price table:
-agent = Agent("claude-opus-4-8", tools=tools, budget=Budget(
-    max_usd=0.50,
-    prices={"claude-opus-4-8": {"input": 15.0, "output": 75.0}},  # $ per 1M tokens
-))
+prices = {"claude-opus-4-8": {"input": 15.0, "output": 75.0}}   # $ per 1M tokens
+agent = Agent("claude-opus-4-8", tools=tools,
+              budget=Budget(max_usd=0.50, prices=prices))
+
+result = await agent.run("...")
+result.usage        # {"input_tokens": ..., "output_tokens": ...}
+result.cost(prices) # dollars, priced per step against the model that ran
 ```
+
+Prices are yours to supply: they vary by provider and drift, so the library
+ships no table and will not guess. That cuts both ways — `Budget(max_usd=...)`
+without `prices` raises rather than quietly computing $0 and never firing, and
+so does a run that reaches a model the table does not cover.
 
 Route each step to the cheapest model that can handle it. The model that
 actually ran is recorded per step, so routing is visible in the trace and
@@ -106,9 +114,12 @@ router = RuleRouter(
 agent = Agent(model=router, tools=tools)
 ```
 
-For repeated runs, `AnthropicModel("claude-opus-4-8", cache=True)` marks the
+For repeated runs, `Agent("claude-opus-4-8", tools=tools, cache=True)` marks the
 stable prefix (system prompt and tool definitions) for prompt caching. Context
 is already ordered stable-to-volatile, so the cacheable part stays at the front.
+If you build the model yourself, set it there instead —
+`AnthropicModel("claude-opus-4-8", cache=True)` — since that model, not the
+facade, owns the setting.
 
 ## Resilient tools
 
@@ -194,9 +205,18 @@ if not decision.passed:
 ```
 
 Safety is exact set membership (a rule, not a judge); open-ended correctness can
-use an `LLM Judge`. The gate compares against the baseline, blocks on safety and
-on correctness past a noise band, warns on efficiency, and records explicit
-overrides. Turn a traced production failure into a regression scenario with
+use an `LLM Judge`. Every rate comes with the standard error that says how solid
+it is — `profile()["noise"]` — and the gate warns when its own threshold sits
+inside that band, because a 5% rule cannot resolve a difference measured to
+±25%. The gate compares against the baseline, blocks on safety and on
+correctness past a noise band, warns on efficiency, and makes an override state
+a reason:
+
+```python
+decision.override("hotfix for outage", by="oncall@team", record=audit_log.append)
+```
+
+Turn a traced production failure into a regression scenario with
 `scenario_from_result(result, name, checks=...)`, so the eval set grows from what
 actually went wrong.
 
@@ -314,8 +334,9 @@ The current focus is the production core (`ROADMAP.md`):
   OpenTelemetry tracers, reasoning capture).
 - Done: durable resume after a crash (SQLite store, replay, idempotency keys,
   the three state scopes).
-- Done: hardened tool calls (timeouts, retries with backoff, schema validation,
-  clean structured failures, fallbacks).
+- Done: hardened tool calls (timeouts, retries with backoff, your own validation
+  callback run before the model sees a field, clean structured failures,
+  fallbacks).
 - Done: cost and latency (per-run token and dollar budgets, model routing,
   prompt caching).
 - Done: security and guardrails (permission scoping, action gates, input and

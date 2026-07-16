@@ -31,9 +31,17 @@ from .tool import Tool
 from .tool import tool as make_tool
 
 
-def _resolve_model(model: t.Any, max_tokens: int):
+def _resolve_model(model: t.Any, max_tokens: int, cache: bool = False):
     if isinstance(model, str):
-        return AnthropicModel(model, max_tokens=max_tokens)
+        return AnthropicModel(model, max_tokens=max_tokens, cache=cache)
+    if cache:
+        # A prebuilt model carries its own cache setting; silently dropping this
+        # one would leave caching looking enabled while it is not.
+        raise ValueError(
+            "cache=True only applies when the model is named as a string. "
+            "You passed a model instance, so configure it there instead: "
+            "AnthropicModel(..., cache=True)."
+        )
     return model  # assume it implements the Model interface
 
 
@@ -50,14 +58,20 @@ def _new_run_id() -> str:
 
 
 class Agent:
-    """A model plus tools. Call `run` / `stream` (async) or `run_sync`."""
+    """A model plus tools. Call `run` / `stream` (async) or `run_sync`.
+
+    `cache=True` marks the stable prefix (system prompt and tool schemas) so the
+    provider can reuse it across the steps of a run. It applies only when the
+    model is named as a string, since that is the only case where this facade
+    builds the model; with a model instance or a router, set it there.
+    """
 
     def __init__(self, model: t.Any = None, tools: list | None = None,
                  instructions: str = "", *, max_steps: int = 20,
-                 max_tokens: int = 4096, store=None, engine=None, tracer=None,
-                 router=None, budget=None, guardrails=None, autonomy=None,
-                 memory=None):
-        self.router = self._resolve_router(model, router, max_tokens)
+                 max_tokens: int = 4096, cache: bool = False, store=None,
+                 engine=None, tracer=None, router=None, budget=None,
+                 guardrails=None, autonomy=None, memory=None):
+        self.router = self._resolve_router(model, router, max_tokens, cache)
         self.tools: dict[str, Tool] = {}
         for obj in tools or []:
             tool = _as_tool(obj)
@@ -74,12 +88,20 @@ class Agent:
         self.executor = Executor(self.router, self.tools, guardrails=guardrails)
 
     @staticmethod
-    def _resolve_router(model, router, max_tokens):
-        if router is not None:
-            return router
-        if model is not None and hasattr(model, "choose"):
-            return model  # a Router was passed as `model`
-        return SingleModel(_resolve_model(model, max_tokens))
+    def _resolve_router(model, router, max_tokens, cache=False):
+        explicit = router
+        if explicit is None and model is not None and hasattr(model, "choose"):
+            explicit = model  # a Router was passed as `model`
+        if explicit is not None:
+            if cache:
+                # The router owns the models, so this flag would go nowhere.
+                raise ValueError(
+                    "cache=True only applies when the model is named as a "
+                    "string. With a router, set cache on the models it "
+                    "returns: AnthropicModel(..., cache=True)."
+                )
+            return explicit
+        return SingleModel(_resolve_model(model, max_tokens, cache))
 
     def _tracer_for(self, trace: bool):
         return ConsoleTracer() if trace else self.tracer

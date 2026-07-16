@@ -268,6 +268,12 @@ class OpenAIModel(Model):
         u = getattr(resp, "usage", None)
         usage = {"input_tokens": u.prompt_tokens, "output_tokens": u.completion_tokens} if u else None
 
+        # NOTE: `reasoning` is deliberately left unset. The Chat Completions API
+        # exposes no equivalent of Anthropic's thinking blocks, and inventing one
+        # by echoing `text` would put a summary where callers expect the model's
+        # actual stated intent. Consequence: on this adapter an assisted-mode
+        # approval surface shows `reasoning: None` and falls back to the
+        # decision's text (see rollout.last_reasoning).
         return ModelResponse(
             text=text,
             tool_calls=tool_calls,

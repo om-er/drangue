@@ -67,6 +67,70 @@ async def test_evaluate_produces_a_profile():
     assert profile["avg_steps"] >= 1
 
 
+class FlakyModel(Model):
+    """Alternates pass/fail across calls: exactly 50% over an even run count."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def generate(self, *, system, messages, tools, idempotency_key=None):
+        self.calls += 1
+        return ModelResponse(text="the answer is 5" if self.calls % 2 else "no idea")
+
+
+async def test_profile_reports_the_error_bar_on_a_flaky_rate():
+    # The point of running N times: a rate alone cannot say how solid it is.
+    agent = Agent(model=FlakyModel(), tools=[search])
+    report = await evaluate(agent, [
+        Scenario("flaky", "what is 2+3?", checks=[output_contains("5")], runs=4),
+    ])
+    profile = report.profile()
+
+    assert profile["correctness"] == 0.5
+    # Bernoulli standard error: sqrt(p(1-p)/n) = sqrt(.5*.5/4) = 0.25
+    assert abs(profile["stderr"]["correctness"] - 0.25) < 1e-9
+    assert abs(profile["noise"] - 0.25) < 1e-9
+
+
+async def test_a_deterministic_agent_has_no_spread():
+    agent = Agent(model=ReactiveModel(final="the answer is 5"), tools=[search])
+    report = await evaluate(agent, [
+        Scenario("steady", "what is 2+3?", checks=[output_contains("5")], runs=3),
+    ])
+    profile = report.profile()
+
+    assert profile["correctness"] == 1.0
+    assert profile["noise"] == 0.0          # every run agreed
+    assert profile["stdev_steps"] == 0.0
+
+    sr = report.scenarios[0]
+    assert sr.rate_stderr("correctness") == 0.0
+    assert sr.stdev_tokens == 0.0
+
+
+def test_gate_warns_when_noise_swamps_the_threshold():
+    # A 0.05 threshold cannot resolve a difference measured to +/-0.25.
+    gate = Gate(correctness_max_drop=0.05)
+    baseline = {"correctness": 0.5, "safety": 1.0, "efficiency": 1.0}
+    candidate = {"correctness": 0.5, "safety": 1.0, "efficiency": 1.0, "noise": 0.25}
+
+    decision = gate.evaluate(baseline, candidate)
+
+    assert decision.passed                      # noise informs, it does not veto
+    assert not decision.blocks
+    assert any("standard error" in w for w in decision.warnings)
+
+
+def test_gate_is_quiet_about_noise_when_the_band_is_tight():
+    gate = Gate(correctness_max_drop=0.05)
+    profile = {"correctness": 1.0, "safety": 1.0, "efficiency": 1.0, "noise": 0.0}
+
+    decision = gate.evaluate(profile, profile)
+
+    assert decision.passed
+    assert not decision.warnings
+
+
 async def test_safety_check_detects_forbidden_tool():
     # An agent that calls the dangerous tool fails the safety dimension.
     agent = Agent(model=ReactiveModel(tool_name="delete_everything",
@@ -145,3 +209,43 @@ def test_gate_override_is_recorded():
     assert overridden.overridden is True
     assert overridden.override_reason == "hotfix for outage"
     assert overridden.overridden_by == "oncall@team"
+
+
+def test_gate_override_reaches_the_record_sink():
+    # "Recorded" has to mean something left the process. The sink is the seam.
+    written = []
+    gate = Gate()
+    blocked = gate.evaluate(baseline={"safety": 1.0}, candidate={"safety": 0.5})
+
+    blocked.override("hotfix for outage", by="oncall@team", record=written.append)
+
+    assert len(written) == 1
+    entry = written[0]
+    assert entry["overridden"] is True
+    assert entry["override_reason"] == "hotfix for outage"
+    assert entry["overridden_by"] == "oncall@team"
+    # The record carries what was overridden, not just that it was.
+    assert any("safety" in b for b in entry["blocks"])
+
+
+def test_gate_override_demands_a_reason():
+    gate = Gate()
+    blocked = gate.evaluate(baseline={"safety": 1.0}, candidate={"safety": 0.5})
+
+    for empty in ("", "   "):
+        try:
+            blocked.override(empty, by="oncall@team")
+            assert False, "expected ValueError for an override with no reason"
+        except ValueError as exc:
+            assert "needs a reason" in str(exc)
+
+
+def test_gate_override_record_is_json_shaped():
+    import json
+
+    gate = Gate()
+    blocked = gate.evaluate(baseline={"safety": 1.0}, candidate={"safety": 0.5})
+    record = blocked.override("shipping anyway", by="me").to_record()
+
+    # A sink is usually a file or a table; the record must survive the trip.
+    assert json.loads(json.dumps(record)) == record
