@@ -11,9 +11,10 @@ reconstructable from the outside: see `Result.trace`.
 
 Event types:
     run_started     payload: {input}
-    model_decision  payload: {text, tool_calls, usage, reasoning}
+    model_decision  payload: {text, tool_calls, usage, reasoning, model, stop_reason}
     tool_result     payload: {call_id, name, content}
     run_finished    payload: {output}
+    run_failed      payload: {error, category}   step crashed; resume retries it
 """
 
 from __future__ import annotations
@@ -104,12 +105,33 @@ class Result:
 
     @property
     def status(self) -> str:
-        """completed, paused (awaiting approval), or running."""
+        """completed, paused (awaiting approval), failed, or running."""
         if any(e.type == "run_finished" for e in self.events):
             return "completed"
         if self.pending_approvals:
             return "paused"
+        if self.events and self.events[-1].type == "run_failed":
+            return "failed"
         return "running"
+
+    @property
+    def error(self) -> str | None:
+        """The recorded failure when status is 'failed', else None."""
+        if self.events and self.events[-1].type == "run_failed":
+            return self.events[-1].payload.get("error")
+        return None
+
+    @property
+    def truncated(self) -> bool:
+        """True when the final answer was cut off by the max_tokens ceiling.
+
+        A truncated answer still completes the run; this flag is how a caller
+        distinguishes "the model finished" from "the model ran out of room".
+        """
+        for e in reversed(self.events):
+            if e.type == "model_decision":
+                return e.payload.get("stop_reason") in ("max_tokens", "length")
+        return False
 
     @property
     def pending_approvals(self) -> list:

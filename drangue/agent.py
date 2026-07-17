@@ -71,7 +71,8 @@ class Agent:
                  instructions: str = "", *, max_steps: int = 20,
                  max_tokens: int = 4096, cache: bool = False, store=None,
                  engine=None, tracer=None, router=None, budget=None,
-                 guardrails=None, autonomy=None, memory=None):
+                 guardrails=None, autonomy=None, memory=None,
+                 model_retries: int = 2):
         self.router = self._resolve_router(model, router, max_tokens, cache)
         self.tools: dict[str, Tool] = {}
         for obj in tools or []:
@@ -86,7 +87,8 @@ class Agent:
         self.autonomy = autonomy
         self.memory = memory
         self.orchestrator = Orchestrator(max_steps=max_steps)
-        self.executor = Executor(self.router, self.tools, guardrails=guardrails)
+        self.executor = Executor(self.router, self.tools, guardrails=guardrails,
+                                 model_retries=model_retries)
 
     @staticmethod
     def _resolve_router(model, router, max_tokens, cache=False):

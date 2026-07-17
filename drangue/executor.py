@@ -13,12 +13,17 @@ retries reuse it so a side effect runs exactly once across a crash.
 
 from __future__ import annotations
 
+import asyncio
 import time
 
+from .errors import RateLimitError, TransientError
 from .events import Event
 from .guardrails import blocked_result
 from .hardening import (
+    DEFAULT_BACKOFF,
     MALFORMED_ARGS_KEY,
+    ToolPolicy,
+    _delay,
     malformed_arguments_error,
     run_tool,
     unknown_tool_error,
@@ -27,10 +32,18 @@ from .orchestrator import ModelStep, ToolStep
 
 
 class Executor:
-    def __init__(self, router, tools: dict, guardrails=None):
+    def __init__(self, router, tools: dict, guardrails=None, *,
+                 model_retries: int = 2):
         self.router = router
         self.tools = tools
         self.guardrails = guardrails
+        # Retry policy for the model call itself. It fires only on drangue's
+        # own transient categories (TransientError / RateLimitError, which a
+        # custom Model or wrapper raises deliberately); provider SDK errors
+        # pass through untouched — the SDKs already retry those internally.
+        self.model_policy = ToolPolicy(retries=model_retries,
+                                       backoff=DEFAULT_BACKOFF,
+                                       retry_on=(TransientError, RateLimitError))
 
     async def check_input(self, text: str) -> str | None:
         if self.guardrails is None:
@@ -52,10 +65,23 @@ class Executor:
         started = time.time()   # Event.ts is the step's start, by contract
         t0 = time.monotonic()
         with tracer.span("model", seq=step.seq, model=model_name) as span:
-            resp = await model.generate(
-                system=system, messages=messages, tools=list(self.tools.values()),
-                idempotency_key=idempotency_key,
-            )
+            attempt = 0
+            while True:
+                try:
+                    resp = await model.generate(
+                        system=system, messages=messages,
+                        tools=list(self.tools.values()),
+                        idempotency_key=idempotency_key,
+                    )
+                    break
+                except self.model_policy.retry_on as exc:
+                    if attempt >= self.model_policy.retries:
+                        raise
+                    # Same idempotency key across attempts: a backend that
+                    # honors it returns the first response instead of charging
+                    # twice.
+                    await asyncio.sleep(_delay(self.model_policy, attempt, exc))
+                    attempt += 1
             duration = (time.monotonic() - t0) * 1000.0
             tool_calls = [
                 {"id": c.id, "name": c.name, "arguments": c.arguments}
@@ -76,6 +102,7 @@ class Executor:
                 "usage": resp.usage,
                 "reasoning": resp.reasoning,
                 "model": model_name,
+                "stop_reason": resp.stop_reason,
             },
         )
 

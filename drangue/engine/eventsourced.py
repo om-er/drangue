@@ -18,6 +18,7 @@ import time
 
 from .. import rollout
 from ..events import Event, Result
+from ..hardening import _classify
 from ..memory import item_to_dict, live_items, render_context
 from ..observability import NullTracer
 from ..orchestrator import Done, ModelStep, ToolStep, fold
@@ -158,10 +159,26 @@ class EventSourcedEngine:
                 recorded = next((e for e in events if e.seq == step.seq), None)
                 if recorded is None:
                     key = f"{run_id}:{step.seq}"
-                    produced = await executor.run(
-                        step, system=_compose_system(system, state.recalled),
-                        messages=state.messages, idempotency_key=key, tracer=tracer,
-                    )
+                    try:
+                        produced = await executor.run(
+                            step, system=_compose_system(system, state.recalled),
+                            messages=state.messages, idempotency_key=key, tracer=tracer,
+                        )
+                    except Exception as exc:
+                        # Record the failure before propagating it, so the
+                        # persisted run reads "failed", not "running" forever.
+                        # The exception still reaches the caller; a later
+                        # resume retries from this point (fold skips the
+                        # run_failed marker).
+                        failed = Event(seq=state.next_seq, type="run_failed",
+                                       payload={
+                                           "error": str(exc) or type(exc).__name__,
+                                           "category": _classify(exc),
+                                       })
+                        await store.append(run_id, failed)
+                        if emit:
+                            await emit(failed)
+                        raise
                     await store.append(run_id, produced)
                     if emit:
                         await emit(produced)

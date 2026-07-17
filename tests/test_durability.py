@@ -102,6 +102,70 @@ async def test_side_effecting_tool_runs_exactly_once_across_resume():
     assert runs == ["r:2"]             # charged once, with the stable key for seq 2
 
 
+async def test_a_crashed_step_is_recorded_as_run_failed():
+    from drangue.events import Result
+
+    store = InMemoryStore()
+
+    @tool
+    def noop() -> str:
+        """No-op."""
+        return "x"
+
+    model = ScriptedModel(["CRASH"])
+    agent = Agent(model=model, tools=[noop], store=store, model_retries=0)
+    try:
+        await agent.run("go", run_id="r-fail")
+        assert False, "expected the crash to propagate"
+    except RuntimeError:
+        pass
+
+    events = await store.load("r-fail")
+    assert events[-1].type == "run_failed"
+    assert events[-1].payload["error"] == "process died"
+    # The persisted run reads as failed, not as running forever.
+    result = Result(output="", events=events)
+    assert result.status == "failed"
+    assert result.error == "process died"
+
+    # Resume retries from the failed step and completes.
+    recovered = await Agent(model=ScriptedModel([ModelResponse(text="done")]),
+                            tools=[noop], store=store).run("go", run_id="r-fail")
+    assert recovered.output == "done"
+    assert recovered.status == "completed"
+
+
+async def test_transient_model_errors_are_retried():
+    from drangue import TransientError
+
+    class FlakyOnce(Model):
+        def __init__(self):
+            self.calls = 0
+
+        async def generate(self, *, system, messages, tools, idempotency_key=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise TransientError("blip")
+            return ModelResponse(text="recovered")
+
+    model = FlakyOnce()
+    result = await Agent(model=model, tools=[]).run("go")
+    assert result.output == "recovered"
+    assert model.calls == 2
+    assert result.status == "completed"      # no run_failed recorded
+
+
+async def test_truncated_output_is_flagged():
+    model = ScriptedModel([ModelResponse(text="cut of", stop_reason="max_tokens")])
+    result = await Agent(model=model, tools=[]).run("go")
+    assert result.status == "completed"
+    assert result.truncated is True
+
+    model = ScriptedModel([ModelResponse(text="whole", stop_reason="end_turn")])
+    result = await Agent(model=model, tools=[]).run("go")
+    assert result.truncated is False
+
+
 async def test_resume_of_an_unknown_run_id_raises():
     from drangue import UnknownRunError
 
