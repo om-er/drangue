@@ -135,6 +135,15 @@ class EventSourcedEngine:
             # unknown (see the irreversible-tool handling below).
             started_here: set = set()
 
+            # Live token deltas for stream() consumers. These are EPHEMERAL:
+            # emitted, never appended, and absent on replay; the completed
+            # model_decision event remains the recorded fact.
+            on_delta = None
+            if emit is not None:
+                async def on_delta(text: str) -> None:
+                    await emit(Event(seq=-1, type="model_delta",
+                                     payload={"text": text}))
+
             while True:
                 state = fold(events)
 
@@ -262,6 +271,7 @@ class EventSourcedEngine:
                     produced = await executor.run(
                         step, system=_compose_system(system, state.recalled),
                         messages=state.messages, idempotency_key=key, tracer=tracer,
+                        on_delta=on_delta,
                     )
                 except Exception as exc:
                     # Record the failure before propagating it, so the

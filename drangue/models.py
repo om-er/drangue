@@ -120,7 +120,8 @@ class AnthropicModel(Model):
         flush()
         return out
 
-    async def generate(self, *, system, messages, tools, idempotency_key=None):
+    async def generate(self, *, system, messages, tools, idempotency_key=None,
+                       on_delta=None):
         params: dict = {
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -153,7 +154,15 @@ class AnthropicModel(Model):
         # divergence). Make downstream effects idempotent instead (tools do this
         # via the idempotency_key parameter, see hardening.py).
 
-        resp = await self.client.messages.create(**params)
+        if on_delta is not None:
+            # Stream text deltas to the caller as they arrive; the final
+            # message (the recorded fact) is identical to the blocking path.
+            async with self.client.messages.stream(**params) as stream:
+                async for text in stream.text_stream:
+                    await on_delta(text)
+                resp = await stream.get_final_message()
+        else:
+            resp = await self.client.messages.create(**params)
 
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -272,7 +281,83 @@ class OpenAIModel(Model):
     # check on OpenAI's own reasoning-model names rather than a blanket switch.
     _MAX_COMPLETION_TOKENS_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 
-    async def generate(self, *, system, messages, tools, idempotency_key=None):
+    @staticmethod
+    def _parse_arguments(raw: str) -> dict:
+        raw = raw or "{}"
+        try:
+            arguments = json.loads(raw)
+        except json.JSONDecodeError:
+            return {MALFORMED_ARGS_KEY: raw}
+        if not isinstance(arguments, dict):
+            return {MALFORMED_ARGS_KEY: raw}
+        return arguments
+
+    @staticmethod
+    def _usage_from(u) -> dict | None:
+        # OpenAI's prompt_tokens INCLUDES cached tokens; split them out so the
+        # usage dict has the same invariant as the Anthropic adapter's: keys
+        # are disjoint counts, input_tokens is uncached input only.
+        if not u:
+            return None
+        details = getattr(u, "prompt_tokens_details", None)
+        cached = (getattr(details, "cached_tokens", 0) if details else 0) or 0
+        usage = {
+            "input_tokens": u.prompt_tokens - cached,
+            "output_tokens": u.completion_tokens,
+        }
+        if cached:
+            usage["cache_read_input_tokens"] = cached
+        return usage
+
+    async def _generate_streaming(self, params: dict, on_delta) -> ModelResponse:
+        """Drive a streamed completion, forwarding text deltas as they arrive."""
+        params = {**params, "stream": True,
+                  # Without this the final usage never arrives on the stream.
+                  "stream_options": {"include_usage": True}}
+        text_parts: list[str] = []
+        acc: dict[int, dict] = {}       # tool-call fragments, keyed by index
+        finish_reason = None
+        usage_obj = None
+
+        stream = await self.client.chat.completions.create(**params)
+        async for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage_obj = chunk.usage
+            if not getattr(chunk, "choices", None):
+                continue
+            choice = chunk.choices[0]
+            if getattr(choice, "finish_reason", None):
+                finish_reason = choice.finish_reason
+            delta = choice.delta
+            content = getattr(delta, "content", None)
+            if content:
+                text_parts.append(content)
+                await on_delta(content)
+            for tc in (getattr(delta, "tool_calls", None) or []):
+                slot = acc.setdefault(tc.index, {"id": None, "name": "", "arguments": ""})
+                if getattr(tc, "id", None):
+                    slot["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        slot["name"] = fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["arguments"] += fn.arguments
+
+        tool_calls = [
+            ToolCall(id=slot["id"], name=slot["name"],
+                     arguments=self._parse_arguments(slot["arguments"]))
+            for _, slot in sorted(acc.items())
+        ]
+        return ModelResponse(
+            text="".join(text_parts),
+            tool_calls=tool_calls,
+            usage=self._usage_from(usage_obj),
+            stop_reason=finish_reason,
+        )
+
+    async def generate(self, *, system, messages, tools, idempotency_key=None,
+                       on_delta=None):
         token_param = (
             "max_completion_tokens"
             if self.model.lower().startswith(self._MAX_COMPLETION_TOKENS_PREFIXES)
@@ -302,41 +387,22 @@ class OpenAIModel(Model):
             headers["Idempotency-Key"] = idempotency_key
             params["extra_headers"] = headers
 
+        if on_delta is not None:
+            return await self._generate_streaming(params, on_delta)
+
         resp = await self.client.chat.completions.create(**params)
         message = resp.choices[0].message
         text = message.content or ""
 
         tool_calls: list[ToolCall] = []
         for tc in (message.tool_calls or []):
-            raw = tc.function.arguments or "{}"
-            try:
-                arguments = json.loads(raw)
-            except json.JSONDecodeError:
-                arguments = {MALFORMED_ARGS_KEY: raw}
-            else:
-                if not isinstance(arguments, dict):
-                    arguments = {MALFORMED_ARGS_KEY: raw}
             tool_calls.append(ToolCall(
                 id=tc.id,
                 name=tc.function.name,
-                arguments=arguments,
+                arguments=self._parse_arguments(tc.function.arguments),
             ))
 
-        # OpenAI's prompt_tokens INCLUDES cached tokens; split them out so the
-        # usage dict has the same invariant as the Anthropic adapter's — keys
-        # are disjoint counts, input_tokens is uncached input only.
-        u = getattr(resp, "usage", None)
-        usage = None
-        if u:
-            details = getattr(u, "prompt_tokens_details", None)
-            cached = getattr(details, "cached_tokens", 0) if details else 0
-            cached = cached or 0
-            usage = {
-                "input_tokens": u.prompt_tokens - cached,
-                "output_tokens": u.completion_tokens,
-            }
-            if cached:
-                usage["cache_read_input_tokens"] = cached
+        usage = self._usage_from(getattr(resp, "usage", None))
 
         # NOTE: `reasoning` is deliberately left unset. The Chat Completions API
         # exposes no equivalent of Anthropic's thinking blocks, and inventing one

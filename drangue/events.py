@@ -18,6 +18,10 @@ Event types:
     step_started    payload: {call_id, tool}     intent marker appended before an
                     irreversible tool executes, so a crash between the side
                     effect and its record is detected instead of re-executed
+
+One EPHEMERAL type flows through `agent.stream` but is never appended to the
+store and never appears on replay:
+    model_delta     payload: {text}   a live token chunk from a streaming model
 """
 
 from __future__ import annotations

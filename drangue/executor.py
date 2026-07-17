@@ -14,6 +14,7 @@ retries reuse it so a side effect runs exactly once across a crash.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 
 from .errors import RateLimitError, TransientError
@@ -51,17 +52,31 @@ class Executor:
         return await self.guardrails.check_input(text)
 
     async def run(self, step, *, system: str, messages: list,
-                  idempotency_key: str, tracer) -> Event:
+                  idempotency_key: str, tracer, on_delta=None) -> Event:
         if isinstance(step, ModelStep):
             return await self._run_model(step, system=system, messages=messages,
-                                         idempotency_key=idempotency_key, tracer=tracer)
+                                         idempotency_key=idempotency_key, tracer=tracer,
+                                         on_delta=on_delta)
         if isinstance(step, ToolStep):
             return await self._run_tool(step, idempotency_key=idempotency_key, tracer=tracer)
         raise TypeError(f"Unknown step: {step!r}")
 
-    async def _run_model(self, step, *, system, messages, idempotency_key, tracer) -> Event:
+    @staticmethod
+    def _supports_delta(model) -> bool:
+        # Streaming is opt-in per adapter; a custom Model whose generate has no
+        # on_delta parameter keeps working untouched.
+        try:
+            return "on_delta" in inspect.signature(model.generate).parameters
+        except (TypeError, ValueError):
+            return False
+
+    async def _run_model(self, step, *, system, messages, idempotency_key, tracer,
+                         on_delta=None) -> Event:
         model = self.router.choose(messages=messages, step_index=step.index)
         model_name = getattr(model, "model", None)
+        gen_kwargs: dict = {}
+        if on_delta is not None and self._supports_delta(model):
+            gen_kwargs["on_delta"] = on_delta
         started = time.time()   # Event.ts is the step's start, by contract
         t0 = time.monotonic()
         with tracer.span("model", seq=step.seq, model=model_name) as span:
@@ -72,6 +87,7 @@ class Executor:
                         system=system, messages=messages,
                         tools=list(self.tools.values()),
                         idempotency_key=idempotency_key,
+                        **gen_kwargs,
                     )
                     break
                 except self.model_policy.retry_on as exc:
