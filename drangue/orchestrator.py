@@ -55,6 +55,9 @@ class State:
                                                      # step_started but no result yet
     finish_recorded: bool = False                     # current turn has a
                                                       # run_finished in the log
+    output_schema: dict | None = None                 # recorded structured-output
+                                                      # contract, if any
+    schema_feedback_count: int = 0                    # corrective retries so far
 
 
 def fold(events: list) -> State:
@@ -71,12 +74,23 @@ def fold(events: list) -> State:
     input = ""
     started: set = set()
     finish_recorded = False
+    output_schema = None
+    schema_feedback_count = 0
 
     for e in events:
         next_seq = e.seq + 1
         if e.type == "run_started":
             input = e.payload.get("input", "")
+            output_schema = e.payload.get("output_schema")
             messages.append({"role": "user", "content": e.payload["input"]})
+        elif e.type == "schema_feedback":
+            # A recorded correction: the model's final answer missed the
+            # schema, so the conversation reopens with the errors spelled out.
+            messages.append({"role": "user", "content": e.payload.get("text", "")})
+            finished = False
+            finish_recorded = False
+            output = ""
+            schema_feedback_count += 1
         elif e.type == "user_message":
             # A follow-up turn: the conversation reopens and the orchestrator
             # will ask the model again.
@@ -137,6 +151,8 @@ def fold(events: list) -> State:
         input=input,
         started=started,
         finish_recorded=finish_recorded,
+        output_schema=output_schema,
+        schema_feedback_count=schema_feedback_count,
     )
 
 

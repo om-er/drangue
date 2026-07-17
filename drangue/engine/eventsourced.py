@@ -35,6 +35,8 @@ from __future__ import annotations
 import asyncio
 import time
 
+import json
+
 from .. import rollout
 from ..errors import ConflictError
 from ..events import Event, Result
@@ -42,6 +44,14 @@ from ..hardening import _classify, unknown_outcome_error
 from ..memory import item_to_dict, live_items, render_context
 from ..observability import NullTracer
 from ..orchestrator import Done, ModelStep, ToolStep, fold
+from ..structured import (
+    FINAL_ANSWER,
+    MAX_SCHEMA_FEEDBACK,
+    feedback_text,
+    final_answer_tool,
+    parse_text_answer,
+    validate,
+)
 
 
 def _compose_system(system: str, recalled: list) -> str:
@@ -125,7 +135,11 @@ class EventSourcedEngine:
         with tracer.span("run", run_id=run_id) as run_span:
             events = await store.load(run_id)
             if not events:
-                started = Event(seq=0, type="run_started", payload={"input": input})
+                payload: dict = {"input": input}
+                if ctx.output_schema is not None:
+                    # Recorded, so a resumed run keeps the original contract.
+                    payload["output_schema"] = ctx.output_schema
+                started = Event(seq=0, type="run_started", payload=payload)
                 await store.append(run_id, started)
                 if emit:
                     await emit(started)
@@ -224,6 +238,67 @@ class EventSourcedEngine:
                     continue
 
                 step = orchestrator.next(state)
+                schema = state.output_schema
+
+                # Structured output, plain-text finish: the model answered in
+                # text instead of calling final_answer. Accept the text if it
+                # parses and validates; otherwise record corrective feedback
+                # and re-ask, up to MAX_SCHEMA_FEEDBACK times, then finish
+                # unstructured rather than loop forever.
+                if (schema is not None and isinstance(step, Done)
+                        and state.finished and not state.finish_recorded):
+                    parsed, errors = parse_text_answer(state.output, schema)
+                    if not errors:
+                        output = json.dumps(parsed)
+                        fin = Event(seq=state.next_seq, type="run_finished",
+                                    payload={"output": output, "structured": True})
+                        if not await _append(store, run_id, fin, emit):
+                            events = await store.load(run_id)
+                            continue
+                        run_span.set("output", output)
+                        return Result(output=output, messages=state.messages,
+                                      events=events + [fin])
+                    if state.schema_feedback_count < MAX_SCHEMA_FEEDBACK:
+                        fb = Event(seq=state.next_seq, type="schema_feedback",
+                                   payload={"text": feedback_text(errors)})
+                        if await _append(store, run_id, fb, emit):
+                            events = events + [fb]
+                        else:
+                            events = await store.load(run_id)
+                        continue
+                    # Out of corrections: fall through to an unstructured
+                    # finish (output_parsed will be None, honestly).
+
+                # Structured output, the delivery path: a final_answer call is
+                # validated and recorded, never dispatched to a real tool.
+                if (schema is not None and isinstance(step, ToolStep)
+                        and step.call.name == FINAL_ANSWER):
+                    errors = validate(schema, step.call.arguments)
+                    if errors:
+                        content = json.dumps({
+                            "ok": False, "tool": FINAL_ANSWER,
+                            "error": {"category": "validation",
+                                      "message": feedback_text(errors)},
+                        })
+                    else:
+                        content = json.dumps({"ok": True})
+                    ev = Event(seq=state.next_seq, type="tool_result",
+                               payload={"call_id": step.call.id,
+                                        "name": FINAL_ANSWER,
+                                        "content": content})
+                    if not await _append(store, run_id, ev, emit):
+                        events = await store.load(run_id)
+                        continue
+                    events = events + [ev]
+                    if not errors:
+                        output = json.dumps(step.call.arguments)
+                        fin = Event(seq=state.next_seq + 1, type="run_finished",
+                                    payload={"output": output, "structured": True})
+                        if await _append(store, run_id, fin, emit):
+                            events = events + [fin]
+                        else:
+                            events = await store.load(run_id)
+                    continue
 
                 # Input guardrail: vet the RECORDED input once, right before
                 # the first model step. Keying off the log (not the fresh-run
@@ -274,6 +349,8 @@ class EventSourcedEngine:
                 # reversible. Anything needing approval, shadow mode, or an
                 # intent marker falls back to the serial path below.
                 if (isinstance(step, ToolStep) and len(state.pending) > 1
+                        and not (schema is not None
+                                 and any(c.name == FINAL_ANSWER for c in state.pending))
                         and _can_parallelize(state.pending, autonomy, executor)):
                     produced = await self._run_parallel_tools(
                         state, run_id, executor, store, emit, tracer)
@@ -334,6 +411,7 @@ class EventSourcedEngine:
                         step, system=_compose_system(system, state.recalled),
                         messages=state.messages, idempotency_key=key, tracer=tracer,
                         on_delta=on_delta,
+                        extra_tools=[final_answer_tool(schema)] if schema is not None else None,
                     )
                 except Exception as exc:
                     # Record the failure before propagating it, so the

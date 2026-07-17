@@ -13,6 +13,8 @@ Event types:
     run_started     payload: {input}
     user_message    payload: {text}   a follow-up turn into a completed run;
                     reopens the conversation and the model is asked again
+    schema_feedback payload: {text}   recorded correction when a structured
+                    run's final answer missed its schema; the model is re-asked
     model_decision  payload: {text, tool_calls, usage, reasoning, model, stop_reason}
     tool_result     payload: {call_id, name, content}
     run_finished    payload: {output}
@@ -28,6 +30,7 @@ store and never appears on replay:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 from .budget import cost_from_events as _cost_from_events
@@ -128,6 +131,22 @@ class Result:
         """The recorded failure when status is 'failed', else None."""
         if self.events and self.events[-1].type == "run_failed":
             return self.events[-1].payload.get("error")
+        return None
+
+    @property
+    def output_parsed(self):
+        """The validated object from a structured run, else None.
+
+        Set when the run had an `output_schema` and the final answer
+        satisfied it (`run_finished` carries `structured: true`). A
+        structured run that exhausted its corrections finishes with plain
+        text and None here, so the miss is visible rather than guessed at.
+        """
+        for e in reversed(self.events):
+            if e.type == "run_finished":
+                if e.payload.get("structured"):
+                    return json.loads(e.payload.get("output", "null"))
+                return None
         return None
 
     @property

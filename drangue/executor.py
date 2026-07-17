@@ -52,11 +52,12 @@ class Executor:
         return await self.guardrails.check_input(text)
 
     async def run(self, step, *, system: str, messages: list,
-                  idempotency_key: str, tracer, on_delta=None) -> Event:
+                  idempotency_key: str, tracer, on_delta=None,
+                  extra_tools: list | None = None) -> Event:
         if isinstance(step, ModelStep):
             return await self._run_model(step, system=system, messages=messages,
                                          idempotency_key=idempotency_key, tracer=tracer,
-                                         on_delta=on_delta)
+                                         on_delta=on_delta, extra_tools=extra_tools)
         if isinstance(step, ToolStep):
             return await self._run_tool(step, idempotency_key=idempotency_key, tracer=tracer)
         raise TypeError(f"Unknown step: {step!r}")
@@ -71,7 +72,7 @@ class Executor:
             return False
 
     async def _run_model(self, step, *, system, messages, idempotency_key, tracer,
-                         on_delta=None) -> Event:
+                         on_delta=None, extra_tools=None) -> Event:
         model = self.router.choose(messages=messages, step_index=step.index)
         model_name = getattr(model, "model", None)
         gen_kwargs: dict = {}
@@ -85,7 +86,7 @@ class Executor:
                 try:
                     resp = await model.generate(
                         system=system, messages=messages,
-                        tools=list(self.tools.values()),
+                        tools=list(self.tools.values()) + list(extra_tools or []),
                         idempotency_key=idempotency_key,
                         **gen_kwargs,
                     )

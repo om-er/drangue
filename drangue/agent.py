@@ -72,7 +72,7 @@ class Agent:
                  max_tokens: int = 4096, cache: bool = False, store=None,
                  engine=None, tracer=None, router=None, budget=None,
                  guardrails=None, autonomy=None, memory=None,
-                 model_retries: int = 2):
+                 model_retries: int = 2, output_schema: dict | None = None):
         self.router = self._resolve_router(model, router, max_tokens, cache)
         self.tools: dict[str, Tool] = {}
         for obj in tools or []:
@@ -86,6 +86,7 @@ class Agent:
         self.guardrails = guardrails
         self.autonomy = autonomy
         self.memory = memory
+        self.output_schema = output_schema
         self.orchestrator = Orchestrator(max_steps=max_steps)
         self.executor = Executor(self.router, self.tools, guardrails=guardrails,
                                  model_retries=model_retries)
@@ -109,7 +110,8 @@ class Agent:
     def _tracer_for(self, trace: bool):
         return ConsoleTracer() if trace else self.tracer
 
-    def _context(self, input, run_id, *, trace=False, emit=None) -> RunContext:
+    def _context(self, input, run_id, *, trace=False, emit=None,
+                 output_schema=None) -> RunContext:
         return RunContext(
             run_id=run_id or _new_run_id(),
             input=input or "",
@@ -122,10 +124,11 @@ class Agent:
             budget=self.budget,
             autonomy=self.autonomy,
             memory=self.memory,
+            output_schema=output_schema or self.output_schema,
         )
 
     async def run(self, input: str | None = None, *, run_id: str | None = None,
-                  trace: bool = False) -> Result:
+                  trace: bool = False, output_schema: dict | None = None) -> Result:
         """Run to completion, or resume a paused/crashed run by run_id.
 
         Multi-turn: calling run() again with the same run_id and a NEW input
@@ -134,8 +137,14 @@ class Agent:
         resumes that turn instead of appending a duplicate. A run that is
         mid-flight or paused refuses a new input (resume it first).
         max_steps counts model calls across all turns of the conversation.
+
+        `output_schema` constrains the final answer to a JSON schema (see
+        drangue/structured.py); the parsed object is `result.output_parsed`.
+        The schema is recorded in the log at run start, so a resume keeps the
+        original run's contract.
         """
-        return await self.engine.run(self._context(input, run_id, trace=trace))
+        return await self.engine.run(self._context(
+            input, run_id, trace=trace, output_schema=output_schema))
 
     async def resume(self, run_id: str, *, trace: bool = False) -> Result:
         """Resume a run (e.g. after an approval). Alias for run with a run_id."""

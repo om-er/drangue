@@ -25,6 +25,7 @@ class RunContext:
     budget: t.Any = None
     autonomy: t.Any = None
     memory: t.Any = None
+    output_schema: dict | None = None   # constrain the final answer (structured.py)
 
 
 @dataclass
