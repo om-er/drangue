@@ -100,9 +100,18 @@ class EventSourcedEngine:
                 # Enforce the budget before an expensive (model) step, using the
                 # spend already recorded in the log. Finish gracefully instead of
                 # starting work the run cannot afford.
-                if (isinstance(step, ModelStep) and budget is not None
-                        and budget.exceeded(events)):
-                    step = Done("(stopped: budget exhausted)")
+                if isinstance(step, ModelStep) and budget is not None:
+                    try:
+                        over = budget.exceeded(events)
+                    except ValueError as exc:
+                        # Spend cannot be computed (an unpriced model in the
+                        # log). Fail closed, but as a recorded graceful stop
+                        # before more spend — not a crash that leaves the run
+                        # looking alive.
+                        step = Done(f"(stopped: budget unenforceable: {exc})")
+                    else:
+                        if over:
+                            step = Done("(stopped: budget exhausted)")
 
                 if isinstance(step, Done):
                     run_span.set("output", step.output)

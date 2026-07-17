@@ -77,21 +77,19 @@ def test_token_budget_without_prices_is_still_fine():
     assert Budget(max_tokens=100).prices is None
 
 
-async def test_usd_budget_refuses_to_price_a_model_it_has_no_price_for():
+async def test_usd_budget_with_an_unpriced_model_stops_the_run_gracefully():
     # Routing can send a step to a model the table does not cover. Counting it
-    # as free would under-report spend and stop the limit from firing.
-    # max_steps stays at the default: the budget is only consulted before a
-    # ModelStep, so the run must reach a *second* model step for the recorded
-    # unpriced decision to be priced at all.
+    # as free would under-report spend and stop the limit from firing — but
+    # crashing mid-loop would leave a run that can never finish. Fail closed
+    # as a recorded, graceful stop before the next model call.
     model = LoopingModel(name="unpriced", per_call_tokens=1_000_000)
     budget = Budget(max_usd=15.0, prices={"other": {"input": 10.0, "output": 30.0}})
     agent = Agent(model=model, tools=[add], budget=budget)
 
-    try:
-        await agent.run("go")
-        assert False, "expected ValueError for a model missing from the price table"
-    except ValueError as exc:
-        assert "no price for model 'unpriced'" in str(exc)
+    result = await agent.run("go")
+    assert result.output.startswith("(stopped: budget unenforceable")
+    assert "no price for model 'unpriced'" in result.output
+    assert any(e.type == "run_finished" for e in result.events)
 
 
 async def test_result_reports_cost_given_a_price_table():
@@ -120,6 +118,42 @@ async def test_result_cost_refuses_an_unpriced_model():
         assert False, "expected ValueError for a model missing from the price table"
     except ValueError as exc:
         assert "no price for model 'unpriced'" in str(exc)
+
+
+def test_cache_tokens_are_priced_with_anthropic_default_ratios():
+    from drangue.budget import cost_from_events
+
+    events = [SimpleNamespace(type="model_decision", payload={
+        "model": "m",
+        "usage": {"input_tokens": 1_000_000, "output_tokens": 0,
+                  "cache_creation_input_tokens": 1_000_000,
+                  "cache_read_input_tokens": 1_000_000},
+    })]
+    prices = {"m": {"input": 10.0, "output": 30.0}}
+    # 10 (input) + 12.5 (write at 1.25x) + 1 (read at 0.1x)
+    assert cost_from_events(events, prices) == 23.5
+
+
+def test_cache_prices_can_be_given_explicitly():
+    from drangue.budget import cost_from_events
+
+    events = [SimpleNamespace(type="model_decision", payload={
+        "model": "m",
+        "usage": {"input_tokens": 0, "output_tokens": 0,
+                  "cache_read_input_tokens": 1_000_000},
+    })]
+    # e.g. OpenAI-style cached reads at half the input price
+    prices = {"m": {"input": 10.0, "output": 30.0, "cache_read": 5.0}}
+    assert cost_from_events(events, prices) == 5.0
+
+
+def test_token_budget_counts_cache_tokens():
+    events = [SimpleNamespace(type="model_decision", payload={
+        "usage": {"input_tokens": 50, "output_tokens": 10,
+                  "cache_creation_input_tokens": 2_000,
+                  "cache_read_input_tokens": 18_000},
+    })]
+    assert Budget(max_tokens=100_000).tokens(events) == 20_060
 
 
 def test_cost_can_under_count_explicitly_when_asked():
