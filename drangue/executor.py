@@ -150,4 +150,12 @@ class Executor:
             kwargs["idempotency_key"] = idempotency_key
         # run_tool applies the tool's policy: timeout, retry, validate, and turns
         # any failure into a clean, structured result the model can reason about.
-        return await run_tool(tool, kwargs)
+        content = await run_tool(tool, kwargs)
+        # Result guardrail: tool results are the classic injection carrier.
+        # A flagged result is withheld from the conversation; the withholding
+        # itself is what gets recorded and replayed.
+        if self.guardrails is not None:
+            reason = await self.guardrails.check_result(tool.name, content)
+            if reason is not None:
+                return blocked_result(tool.name, reason, category="result_blocked")
+        return content

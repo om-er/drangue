@@ -10,10 +10,15 @@ in the prompt, because a prompt instruction is exactly what injection overrides.
   3. Action gates      - consequential or irreversible actions require approval.
   4. Output guardrail  - inspect a proposed tool call (its name and arguments)
      before it runs, e.g. to block an exfiltration path.
+  5. Result guardrail  - inspect a tool's RESULT before the model sees it.
+     Tool results are the classic injection carrier (a fetched web page, a
+     ticket body); a flagged result is withheld from the conversation.
 
 A blocked tool call comes back to the model as a clean, structured result it can
-reason about, the same shape as any other tool failure. The decision is recorded
-in the log, so it is replay-safe and auditable.
+reason about, the same shape as any other tool failure. The block itself is
+recorded in the log (as the tool_result content), so it is replay-safe and
+auditable; a custom approver's decisions are yours to persist if you need an
+audit trail beyond the block.
 """
 
 from __future__ import annotations
@@ -24,11 +29,11 @@ import typing as t
 from dataclasses import dataclass, field
 
 
-def blocked_result(name: str, reason: str) -> str:
+def blocked_result(name: str, reason: str, *, category: str = "blocked") -> str:
     return json.dumps({
         "ok": False,
         "tool": name,
-        "error": {"category": "blocked", "message": reason},
+        "error": {"category": category, "message": reason},
     })
 
 
@@ -46,11 +51,25 @@ class Guardrails:
     approver: t.Callable | None = None        # (tool_name, arguments) -> bool
     input_guard: t.Callable | None = None     # (text) -> reason | None
     output_guard: t.Callable | None = None    # (tool_name, arguments) -> reason | None
+    result_guard: t.Callable | None = None    # (tool_name, result_text) -> reason | None
 
     async def check_input(self, text: str) -> str | None:
         if self.input_guard is None:
             return None
         return await _maybe_await(self.input_guard(text))
+
+    async def check_result(self, tool_name: str, content: str) -> str | None:
+        """Screen a tool's result before it enters the conversation.
+
+        A non-None reason withholds the result: the model receives a clean
+        `result_blocked` failure instead of the flagged content. The side
+        effect (if any) has already happened — this layer protects the
+        conversation, not the world. For redaction rather than blocking, wrap
+        the tool itself (e.g. a `validate` transform in its policy).
+        """
+        if self.result_guard is None:
+            return None
+        return await _maybe_await(self.result_guard(tool_name, content))
 
     async def check_tool(self, tool, arguments: dict) -> str | None:
         name = tool.name
