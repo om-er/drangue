@@ -87,12 +87,15 @@ async def test_profile_reports_the_error_bar_on_a_flaky_rate():
     profile = report.profile()
 
     assert profile["correctness"] == 0.5
-    # Bernoulli standard error: sqrt(p(1-p)/n) = sqrt(.5*.5/4) = 0.25
-    assert abs(profile["stderr"]["correctness"] - 0.25) < 1e-9
-    assert abs(profile["noise"] - 0.25) < 1e-9
+    # Agresti-Coull standard error at p=0.5 over 4 runs: sqrt(.5*.5/(4+z^2)).
+    expected = (0.5 * 0.5 / (4 + 1.96 ** 2)) ** 0.5
+    assert abs(profile["stderr"]["correctness"] - expected) < 1e-9
+    assert abs(profile["noise"] - expected) < 1e-9
 
 
-async def test_a_deterministic_agent_has_no_spread():
+async def test_unanimous_small_samples_still_carry_uncertainty():
+    # 3/3 passes is NOT certainty: the true rate could plausibly be ~30%. The
+    # Wald formula reports zero here; the Agresti-Coull adjustment must not.
     agent = Agent(model=ReactiveModel(final="the answer is 5"), tools=[search])
     report = await evaluate(agent, [
         Scenario("steady", "what is 2+3?", checks=[output_contains("5")], runs=3),
@@ -100,12 +103,19 @@ async def test_a_deterministic_agent_has_no_spread():
     profile = report.profile()
 
     assert profile["correctness"] == 1.0
-    assert profile["noise"] == 0.0          # every run agreed
-    assert profile["stdev_steps"] == 0.0
+    assert profile["noise"] > 0.05          # agreement over 3 runs is a weak claim
+    assert profile["stdev_steps"] == 0.0    # the runs themselves were identical
 
     sr = report.scenarios[0]
-    assert sr.rate_stderr("correctness") == 0.0
+    assert sr.rate_stderr("correctness") > 0.05
     assert sr.stdev_tokens == 0.0
+
+
+async def test_more_runs_shrink_the_error_bar():
+    from drangue.evals import _rate_stderr
+
+    assert _rate_stderr(3, 3) > _rate_stderr(30, 30) > _rate_stderr(300, 300) > 0.0
+    assert _rate_stderr(0, 3) > _rate_stderr(0, 300) > 0.0
 
 
 def test_gate_warns_when_noise_swamps_the_threshold():
@@ -129,6 +139,57 @@ def test_gate_is_quiet_about_noise_when_the_band_is_tight():
 
     assert decision.passed
     assert not decision.warnings
+
+
+async def test_evaluate_refuses_a_run_id_collision():
+    # A second evaluate() against the same store would replay the recorded
+    # runs (zero model calls) and present the old profile as a fresh one.
+    agent = Agent(model=ReactiveModel(final="the answer is 5"), tools=[search])
+    scenarios = [Scenario("basic", "what is 2+3?", checks=[output_contains("5")])]
+    await evaluate(agent, scenarios, run_id_prefix="build-1")
+
+    try:
+        await evaluate(agent, scenarios, run_id_prefix="build-1")
+        assert False, "expected ValueError for a reused run_id_prefix"
+    except ValueError as exc:
+        assert "already exists" in str(exc)
+
+    # A fresh prefix measures again.
+    report = await evaluate(agent, scenarios, run_id_prefix="build-2")
+    assert report.profile()["correctness"] == 1.0
+
+
+def test_gate_blocks_when_a_measured_dimension_disappears():
+    # Deleting the only safety scenario must not read as safety == 1.0.
+    gate = Gate()
+    baseline = {"correctness": 1.0, "safety": 1.0}
+    candidate = {"correctness": 1.0}    # safety no longer measured
+
+    decision = gate.evaluate(baseline, candidate)
+    assert not decision.passed
+    assert any("no longer checked" in b for b in decision.blocks)
+
+
+def test_gate_warns_when_baseline_noise_swamps_the_threshold():
+    gate = Gate(correctness_max_drop=0.05)
+    baseline = {"correctness": 0.5, "noise": 0.25}
+    candidate = {"correctness": 0.5}
+
+    decision = gate.evaluate(baseline, candidate)
+    assert decision.passed
+    assert any("standard error" in w for w in decision.warnings)
+
+
+async def test_judge_accepts_a_verdict_that_is_not_the_first_word():
+    judge = Judge(FixedTextModel("The output satisfies the criterion, so yes."))
+    assert await judge.yes_no("does it?") is True
+
+    judge = Judge(FixedTextModel("It does not satisfy it: no."))
+    assert await judge.yes_no("does it?") is False
+
+    # No recognizable verdict scores as no, never as yes.
+    judge = Judge(FixedTextModel("cannot tell"))
+    assert await judge.yes_no("does it?") is False
 
 
 async def test_safety_check_detects_forbidden_tool():
