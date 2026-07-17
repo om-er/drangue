@@ -362,20 +362,15 @@ async def test_resume_of_an_unknown_run_id_raises():
     assert await agent.store.load("typo-run-id") == []
 
 
-async def test_run_with_a_different_input_on_an_existing_run_is_refused():
+async def test_same_input_on_an_existing_run_replays_without_a_model_call():
+    # A new input on a COMPLETED run opens a follow-up turn (see
+    # tests/test_multiturn.py); the same input stays a pure replay, and an
+    # in-flight run still refuses a different input.
     store = InMemoryStore()
-    model = ScriptedModel([ModelResponse(text="first answer"),
-                           ModelResponse(text="never reached")])
+    model = ScriptedModel([ModelResponse(text="first answer")])
     agent = Agent(model=model, tools=[add], store=store)
     await agent.run("first question", run_id="r1")
 
-    try:
-        await agent.run("second question", run_id="r1")
-        assert False, "expected ValueError: the new input would be silently dropped"
-    except ValueError as exc:
-        assert "already exists" in str(exc)
-
-    # Re-running with the SAME input is the replay path and stays legal.
     result = await agent.run("first question", run_id="r1")
     assert result.output == "first answer"
     assert model.calls == 1

@@ -121,14 +121,49 @@ class EventSourcedEngine:
                 recorded = next((e.payload.get("input", "") for e in events
                                  if e.type == "run_started"), "")
                 if input != recorded:
-                    # Silently replaying the old run's answer for a new
-                    # question is the worst possible interpretation; refuse.
-                    raise ValueError(
-                        f"run {run_id!r} already exists with a different input "
-                        f"({recorded!r}). Follow-up messages into an existing "
-                        "run are not supported; resume it with "
-                        "agent.resume(run_id) or start a new run_id."
-                    )
+                    state0 = fold(events)
+                    last_um = next((e for e in reversed(events)
+                                    if e.type == "user_message"), None)
+                    if last_um is not None and last_um.payload.get("text") == input:
+                        # The previous turn already carries this exact input
+                        # (a crash-retry, or the caller re-sent it): resume or
+                        # replay that turn rather than duplicate it, the same
+                        # way a repeated turn-one input replays.
+                        pass
+                    elif state0.finished:
+                        # A follow-up turn into a completed conversation. The
+                        # new input is vetted like the first one was.
+                        reason = await executor.check_input(input)
+                        msg = Event(seq=state0.next_seq, type="user_message",
+                                    payload={"text": input})
+                        await store.append(run_id, msg)
+                        if emit:
+                            await emit(msg)
+                        events = events + [msg]
+                        if reason is not None:
+                            output = f"(blocked: {reason})"
+                            blocked = Event(seq=state0.next_seq + 1,
+                                            type="run_finished",
+                                            payload={"output": output,
+                                                     "blocked": True})
+                            await store.append(run_id, blocked)
+                            if emit:
+                                await emit(blocked)
+                            events = events + [blocked]
+                            run_span.set("output", output)
+                            return Result(output=output,
+                                          messages=fold(events).messages,
+                                          events=events)
+                    else:
+                        # Mid-flight or paused: silently replaying the old
+                        # answer for a new question is the worst possible
+                        # interpretation; refuse.
+                        raise ValueError(
+                            f"run {run_id!r} is still in flight with a "
+                            f"different input ({recorded!r}). Follow-ups are "
+                            "only accepted on a completed run; resume this "
+                            "one with agent.resume(run_id) first."
+                        )
 
             # Intent events THIS process appended. An unresolved step_started
             # that is NOT in here came from a dead process, and its outcome is
@@ -212,7 +247,7 @@ class EventSourcedEngine:
 
                 if isinstance(step, Done):
                     run_span.set("output", step.output)
-                    if not any(e.type == "run_finished" for e in events):
+                    if not state.finish_recorded:
                         finished = Event(seq=state.next_seq, type="run_finished",
                                          payload={"output": step.output})
                         if not await _append(store, run_id, finished, emit):

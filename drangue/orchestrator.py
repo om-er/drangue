@@ -53,6 +53,8 @@ class State:
     input: str = ""                                  # the recorded run input
     started: set = field(default_factory=set)        # call_ids with a recorded
                                                      # step_started but no result yet
+    finish_recorded: bool = False                     # current turn has a
+                                                      # run_finished in the log
 
 
 def fold(events: list) -> State:
@@ -68,12 +70,20 @@ def fold(events: list) -> State:
     recalled_done = False
     input = ""
     started: set = set()
+    finish_recorded = False
 
     for e in events:
         next_seq = e.seq + 1
         if e.type == "run_started":
             input = e.payload.get("input", "")
             messages.append({"role": "user", "content": e.payload["input"]})
+        elif e.type == "user_message":
+            # A follow-up turn: the conversation reopens and the orchestrator
+            # will ask the model again.
+            messages.append({"role": "user", "content": e.payload.get("text", "")})
+            finished = False
+            finish_recorded = False
+            output = ""
         elif e.type == "step_started":
             started.add(e.payload.get("call_id"))
         elif e.type == "memory_recalled":
@@ -111,6 +121,7 @@ def fold(events: list) -> State:
             })
         elif e.type == "run_finished":
             finished = True
+            finish_recorded = True
             output = e.payload.get("output", "")
 
     pending = [c for c in current_calls if c.id not in results]
@@ -125,6 +136,7 @@ def fold(events: list) -> State:
         recalled_done=recalled_done,
         input=input,
         started=started,
+        finish_recorded=finish_recorded,
     )
 
 

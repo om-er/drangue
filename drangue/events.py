@@ -11,6 +11,8 @@ reconstructable from the outside: see `Result.trace`.
 
 Event types:
     run_started     payload: {input}
+    user_message    payload: {text}   a follow-up turn into a completed run;
+                    reopens the conversation and the model is asked again
     model_decision  payload: {text, tool_calls, usage, reasoning, model, stop_reason}
     tool_result     payload: {call_id, name, content}
     run_finished    payload: {output}

@@ -126,7 +126,15 @@ class Agent:
 
     async def run(self, input: str | None = None, *, run_id: str | None = None,
                   trace: bool = False) -> Result:
-        """Run to completion, or resume a paused/crashed run by run_id."""
+        """Run to completion, or resume a paused/crashed run by run_id.
+
+        Multi-turn: calling run() again with the same run_id and a NEW input
+        on a COMPLETED run appends a follow-up turn; the model sees the whole
+        prior conversation. Repeating the latest turn's input replays or
+        resumes that turn instead of appending a duplicate. A run that is
+        mid-flight or paused refuses a new input (resume it first).
+        max_steps counts model calls across all turns of the conversation.
+        """
         return await self.engine.run(self._context(input, run_id, trace=trace))
 
     async def resume(self, run_id: str, *, trace: bool = False) -> Result:
