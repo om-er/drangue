@@ -44,7 +44,7 @@ battery is always strictly additive.
 | **Memory** | `async recall/remember` | `NullMemory` | pgvector memory, Redis memory | 2 (needs core hook, below) |
 | **Router** | `choose(messages, step_index)` | `SingleModel`, `RuleRouter` | cost-aware router, latency router | 2 |
 | **Judge** | `async yes_no(question)` | `Judge` (wraps a Model) | embedding judge, rubric judge | 2 |
-| **Tools** | `@tool` functions | (none) | SRE toolpack, web/browser tools, DB tools | 3 |
+| **Tools** | `@tool` functions | (none) | drangue-mcp (any MCP server), SRE toolpack, web/browser tools | 3 |
 | **Guard callables** | `input_guard` / `output_guard` / `approver` | (none) | injection scanner, PII redactor, Slack approver | 2-3 |
 | **Eval checks** | `Check` builders | `output_contains`, `forbids_tool`, ... | domain check packs | 3 |
 
@@ -135,6 +135,7 @@ drangue/                         # repo root (monorepo)
       drangue_memory/  tests/  pyproject.toml
     drangue-postgres/            # Tier 1: Store    -> import drangue_postgres
     drangue-temporal/            # Tier 2: Engine
+    drangue-mcp/                 # Tier 3: Tools    -> import drangue_mcp
 ```
 
 Each extension has its own `pyproject.toml` pinning `drangue>=X,<Y` and is
