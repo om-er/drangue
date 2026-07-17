@@ -69,6 +69,19 @@ async def _append(store, run_id: str, event: Event, emit) -> bool:
     return True
 
 
+def _can_parallelize(pending, autonomy, executor) -> bool:
+    """Sibling tool calls may run concurrently only when nothing about them
+    needs the serial machinery: no approval pause, no shadow proposal, no
+    step_started intent marker (irreversible tools stay serial)."""
+    for call in pending:
+        if autonomy is not None and autonomy.mode_for(call.name) != rollout.AUTONOMOUS:
+            return False
+        tool = executor.tools.get(call.name)
+        if tool is not None and not tool.reversible:
+            return False
+    return True
+
+
 async def _append_shielded(store, run_id: str, event: Event, emit) -> bool:
     """Like _append, but the write completes even if this task is cancelled.
 
@@ -256,6 +269,20 @@ class EventSourcedEngine:
                         events = events + [finished]
                     return Result(output=step.output, messages=state.messages, events=events)
 
+                # Independent sibling tool calls run concurrently when it is
+                # safe: every pending call autonomous and every target tool
+                # reversible. Anything needing approval, shadow mode, or an
+                # intent marker falls back to the serial path below.
+                if (isinstance(step, ToolStep) and len(state.pending) > 1
+                        and _can_parallelize(state.pending, autonomy, executor)):
+                    produced = await self._run_parallel_tools(
+                        state, run_id, executor, store, emit, tracer)
+                    if produced is None:
+                        events = await store.load(run_id)   # lost a write race
+                    else:
+                        events = events + produced
+                    continue
+
                 # Per-action autonomy (Chapter 12): shadow proposes without
                 # acting, assisted pauses for approval, autonomous falls through.
                 if isinstance(step, ToolStep) and autonomy is not None:
@@ -333,6 +360,38 @@ class EventSourcedEngine:
                     events = await store.load(run_id)
                     continue
                 events = events + [produced]
+
+    async def _run_parallel_tools(self, state, run_id, executor, store, emit,
+                                  tracer):
+        """Execute every pending sibling call concurrently.
+
+        Seqs are assigned by tool-call order BEFORE execution and results are
+        appended in that order regardless of completion order, so the log is
+        deterministic and a replay folds identically. Returns the appended
+        events, or None after losing a write race (the caller reloads).
+        """
+        steps = [ToolStep(seq=state.next_seq + i, call=call)
+                 for i, call in enumerate(state.pending)]
+
+        async def one(s):
+            return await executor.run(
+                s, system="", messages=state.messages,
+                idempotency_key=f"{run_id}:{s.seq}", tracer=tracer)
+
+        try:
+            produced = await asyncio.gather(*(one(s) for s in steps))
+        except Exception as exc:
+            failed = Event(seq=state.next_seq, type="run_failed",
+                           payload={"error": str(exc) or type(exc).__name__,
+                                    "category": _classify(exc)})
+            await _append(store, run_id, failed, emit)
+            raise
+        appended = []
+        for ev in produced:
+            if not await _append_shielded(store, run_id, ev, emit):
+                return None
+            appended.append(ev)
+        return appended
 
     async def _apply_autonomy(self, step, autonomy, events, state, run_id, store,
                               run_span, emit):

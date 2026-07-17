@@ -282,12 +282,12 @@ pauses and resumes on.
 From code review. None are blockers; they are the gap between "green in tests"
 and the production-grade durability the docstrings advertise.
 
-- **Serial sibling tool calls.** When a model requests several tools in one
-  decision, the orchestrator returns them one ToolStep at a time, so they run
-  sequentially. Parallelizing siblings is the obvious async win left, but it
-  interacts with per-tool guardrails and assisted-mode pauses (some siblings may
-  need approval while others run), so it needs care. Deterministic seq assignment
-  by tool-call order makes it tractable. Not yet done.
+- **Sibling tool calls parallelize conservatively.** When a model requests
+  several tools in one decision they run concurrently only if every call is
+  autonomous and every target tool reversible; anything involving approval,
+  shadow mode, or an intent marker falls back to the serial path. Seqs are
+  assigned by tool-call order before execution, so the log stays deterministic
+  either way.
 - **Model-call exactly-once: partial, backend-dependent.** A stable key
   (`f"{run_id}:{step.seq}"`) is threaded into `model.generate`. OpenAI-compatible
   backends honor it as an `Idempotency-Key`, so a crash between the call returning
