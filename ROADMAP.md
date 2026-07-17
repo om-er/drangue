@@ -150,7 +150,7 @@ timing. This is the substrate the rest of the book stands on. (Ch9)
   model/tool span per step under it.
 - Semantic logging: a `model_decision` carries a short `reasoning` string
   (intent, not just mechanics), which the approval surface reads back. This is
-  passthrough from the model adapter, not something the orchestrator authors —
+  passthrough from the model adapter, not something the orchestrator authors:
   it is populated from Anthropic thinking blocks and is `None` on models that
   expose no equivalent, so treat it as a bonus, not a guarantee.
 - Keep the trace reconstructable from the log rather than persisting spans:
@@ -245,7 +245,7 @@ After Phases 0 to 3, drangue will have:
   model recorded per step, and prompt caching of the stable prefix
   (`Agent(..., cache=True)`; Anthropic-only, since OpenAI caches server-side
   with no client-side markers to set). A dollar budget is refused unless it can
-  actually be computed — see the price-table rule in `budget.py`.
+  actually be computed; see the price-table rule in `budget.py`.
 - **Phase 5, Security and guardrails (Ch11):** DONE. Permission scoping
   (allow/deny) and action gates enforced in the executor, input and output
   guards, fail-closed approval, and reversibility metadata on tools (Guardrails).
@@ -253,7 +253,7 @@ After Phases 0 to 3, drangue will have:
   (shadow/assisted/autonomous), durable pause-approve-resume built on the event
   log, approval surface that carries the agent's reasoning (Autonomy).
 - **Phase 7, Evals and gates (Ch7, Ch8):** DONE. Statistical multi-run scoring
-  across correctness/safety/efficiency — rates carry the standard error that
+  across correctness/safety/efficiency: rates carry the standard error that
   says how solid they are, and the Gate warns when its own threshold sits
   inside the noise band. Rule checks plus a narrow LLM judge,
   scenario_from_result to grow the set from production failures, and a
@@ -294,14 +294,23 @@ and the production-grade durability the docstrings advertise.
   and the decision being appended is exactly-once on resume (within the provider's
   window). Anthropic's Messages API has NO request idempotency key, so the default
   model is AT-LEAST-ONCE there: resume may re-call and double-charge. Mitigation:
-  keep downstream effects idempotent (tools already do, via wants_idempotency_key),
-  or add a "model-call started" marker before the call so resume can detect an
-  in-flight call. The orchestrator-side replay still reuses a recorded decision;
-  this gap is only the crash window before the decision is recorded.
+  keep downstream effects idempotent (tools already do, via wants_idempotency_key).
+  Tools marked `reversible=False` get a `step_started` intent marker before
+  execution, so THAT crash window is detected on resume (`unknown_outcome`
+  failure) rather than re-executed; model calls deliberately do not, because a
+  re-called model is a double charge, not a double side effect.
+- **No per-run lease.** Two live processes driving the same run_id are
+  serialized per event: the store raises `ConflictError` on a seq collision and
+  the losing engine discards its result and folds the winner's. But both
+  processes may still EXECUTE a step before one loses the append race. Crash
+  recovery is safe; live double-driving needs a lease (or an engine like
+  Temporal that provides one).
 - **Sync-tool timeouts bound the caller, not the work.** `wait_for` cannot cancel
-  a worker thread, so a timed-out sync tool keeps running and a retry can run
-  concurrently with it. Documented in `hardening.py`. Truly bounded execution
-  needs a cancellable async tool or an out-of-process worker.
+  a worker thread, so a timed-out sync tool keeps running. Timeouts are therefore
+  NOT retried by default (a retry could run concurrently with the orphaned first
+  attempt); opting in via `retry_on` re-opens that window. Documented in
+  `hardening.py`. Truly bounded execution needs a cancellable async tool or an
+  out-of-process worker.
 - **Budgets are a soft ceiling.** Enforcement reads recorded usage, so the step
   that crosses the limit still runs; the next one is refused. Overshoot is bounded
   by one model call. Documented in `budget.py`.

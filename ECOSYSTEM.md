@@ -138,7 +138,9 @@ drangue/                         # repo root (monorepo)
 ```
 
 Each extension has its own `pyproject.toml` pinning `drangue>=X,<Y` and is
-published to PyPI on its own (`pip install drangue-postgres`). Keeping them in
+meant to be published to PyPI on its own (`pip install drangue-postgres`);
+release automation currently covers only the core, so extension releases are
+manual until that lands. Keeping them in
 one repo buys atomic cross-cutting changes (a battery that needs a seam change is
 a single commit, as the RunSpec work was) and one CI, without giving up the
 dependency boundary. Tier 3 community packages stay in their own repos,
@@ -210,7 +212,8 @@ rebuilds the agent via the registry and runs `EventSourcedEngine`), so every
 feature works unchanged and activity-retry composes with store-resume.
 Human-in-the-loop becomes a durable wait on an approval signal. Both paths
 (run-to-completion and pause-approve-resume) pass against Temporal's
-time-skipping test server. See `drangue-temporal/README.md`.
+time-skipping test server, and CI's `extensions` job runs that suite (with
+`DRANGUE_TEMPORAL_TEST=1`) on every push. See `drangue-temporal/README.md`.
 
 ## Versioning and stability
 

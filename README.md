@@ -96,9 +96,13 @@ result.cost(prices) # dollars, priced per step against the model that ran
 ```
 
 Prices are yours to supply: they vary by provider and drift, so the library
-ships no table and will not guess. That cuts both ways — `Budget(max_usd=...)`
+ships no table and will not guess. That cuts both ways: `Budget(max_usd=...)`
 without `prices` raises rather than quietly computing $0 and never firing, and
-so does a run that reaches a model the table does not cover.
+a run that reaches a model the table does not cover stops with a recorded
+"budget unenforceable" instead of counting it as free. Cached prompt tokens are
+counted and priced too (`cache_write` / `cache_read` price keys, defaulting to
+Anthropic's 1.25x / 0.1x ratios), so `cache=True` does not hide spend from the
+limit.
 
 Route each step to the cheapest model that can handle it. The model that
 actually ran is recorded per step, so routing is visible in the trace and
@@ -117,8 +121,8 @@ agent = Agent(model=router, tools=tools)
 For repeated runs, `Agent("claude-opus-4-8", tools=tools, cache=True)` marks the
 stable prefix (system prompt and tool definitions) for prompt caching. Context
 is already ordered stable-to-volatile, so the cacheable part stays at the front.
-If you build the model yourself, set it there instead —
-`AnthropicModel("claude-opus-4-8", cache=True)` — since that model, not the
+If you build the model yourself, set it there instead
+(`AnthropicModel("claude-opus-4-8", cache=True)`), since that model, not the
 facade, owns the setting.
 
 ## Resilient tools
@@ -140,8 +144,12 @@ def fetch_metrics(service: str) -> str:
 ```
 
 The wrapper applies, in order: timeout, classify the failure, retry transient
-ones with exponential backoff (reusing the idempotency key), validate the
-result, then return a clean failure or a marked-degraded `fallback`. The model
+ones with jittered exponential backoff (reusing the idempotency key), validate
+the result, then return a clean failure or a marked-degraded `fallback`.
+Timeouts are NOT retried by default: a timed-out sync tool may still be
+running, so retrying could execute a side effect twice; opt in with
+`retry_on=DEFAULT_RETRY_ON + (TimeoutError,)` where that is safe. A
+server-sent `Retry-After` is honored as given, never shortened. The model
 receives, for example:
 
 ```json
@@ -163,6 +171,7 @@ guard = Guardrails(
     approver=lambda name, args: ask_human(name, args),
     input_guard=lambda text: "blocked" if looks_malicious(text) else None,
     output_guard=lambda name, args: detect_exfiltration(name, args),
+    result_guard=lambda name, text: flag_injection(text),   # screen what tools RETURN
 )
 agent = Agent("claude-opus-4-8", tools=tools, guardrails=guard)
 ```
@@ -177,9 +186,10 @@ def delete_database(name: str) -> str:
 ```
 
 The layers are independent: an allow-list bounds reach, action gates stop the
-irreversible, and the input and output guards catch malicious content on the way
-in and suspicious actions on the way out. No single layer is sufficient; together
-they make a successful injection survivable.
+irreversible, and the input, output, and result guards catch malicious content
+on the way in, suspicious actions on the way out, and poisoned tool results
+(the classic injection carrier) before the model reads them. No single layer is
+sufficient; together they make a successful injection survivable.
 
 ## Evals and deploy gates
 
@@ -206,7 +216,7 @@ if not decision.passed:
 
 Safety is exact set membership (a rule, not a judge); open-ended correctness can
 use an `LLM Judge`. Every rate comes with the standard error that says how solid
-it is — `profile()["noise"]` — and the gate warns when its own threshold sits
+it is (`profile()["noise"]`), and the gate warns when its own threshold sits
 inside that band, because a 5% rule cannot resolve a difference measured to
 ±25%. The gate compares against the baseline, blocks on safety and on
 correctness past a noise band, warns on efficiency, and makes an override state
@@ -227,7 +237,7 @@ modes: `shadow` (propose, do not execute), `assisted` (pause for a human), or
 `autonomous` (execute, review later).
 
 ```python
-from drangue import Agent, Autonomy
+from drangue import Agent, Autonomy, SQLiteStore
 
 agent = Agent("claude-opus-4-8", tools=tools, store=SQLiteStore("runs.db"),
               autonomy=Autonomy(default="autonomous", modes={"wire_funds": "assisted"}))
@@ -248,8 +258,13 @@ resumes by replay. The side effect happens once, only after approval.
 
 Point an Agent at a durable store and give a run a stable `run_id`. If the
 process dies mid-run, a new one resumes from exactly where it stopped: recorded
-steps are replayed as facts, so the model is not re-called and side effects do
-not happen twice.
+steps are replayed as facts, so recorded work is never redone. The precise
+guarantees, stated honestly: a recorded step never re-executes; a tool that
+declares `idempotency_key` deduplicates even a crash that lands between the
+side effect and its record; a tool marked `reversible=False` gets an intent
+marker before it runs, so that crash window is *detected* on resume (the model
+receives a clean `unknown_outcome` failure) instead of re-executed; plain
+reversible tools and model calls are at-least-once.
 
 ```python
 from drangue import Agent, SQLiteStore
@@ -305,7 +320,8 @@ Swap the model line for a cheap hosted backend without touching anything else:
 above, or any object with an async `generate` method. That seam is how you swap
 providers, add caching, or pass a fake model in tests. The OpenAI and Anthropic
 adapters are both tested fully offline against fake clients, see
-`tests/test_openai_model.py`.
+`tests/test_openai_model.py` and the AnthropicModel tests in
+`tests/test_cost.py`.
 
 ## What drangue does not do
 
@@ -356,7 +372,7 @@ pip install -e ".[dev]"
 python run_tests.py     # no pytest needed; uses a tiny async runner
 ```
 
-Contributions are welcome under MIT with a DCO sign-off (`git commit -s`) —
+Contributions are welcome under MIT with a DCO sign-off (`git commit -s`);
 see `CONTRIBUTING.md`.
 
 ## License
