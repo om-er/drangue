@@ -39,6 +39,10 @@ class ModelResponse:
     usage: dict | None = None
     reasoning: str | None = None    # the model's stated intent, when available
     stop_reason: str | None = None
+    # Provider-opaque reasoning blocks that must be re-sent verbatim on the
+    # next turn (Anthropic's signed thinking blocks). JSON-shaped so they
+    # survive the event log; adapters that have none leave this empty.
+    thinking_blocks: list = field(default_factory=list)
 
 
 class Model(abc.ABC):
@@ -94,6 +98,11 @@ class AnthropicModel(Model):
                 out.append({"role": "user", "content": m["content"]})
             elif m["role"] == "assistant":
                 blocks: list[dict] = []
+                # With extended thinking enabled, the API requires the signed
+                # thinking blocks to be re-sent at the START of the prior
+                # assistant turn when tool results follow; dropping them is a
+                # guaranteed 400 on the next step.
+                blocks.extend(m.get("thinking_blocks") or [])
                 if m.get("content"):
                     blocks.append({"type": "text", "text": m["content"]})
                 for c in m.get("tool_calls", []):
@@ -149,11 +158,22 @@ class AnthropicModel(Model):
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        thinking_blocks: list[dict] = []
         for block in resp.content:
             if block.type == "text":
                 text_parts.append(block.text)
             elif block.type == "thinking":
                 reasoning_parts.append(getattr(block, "thinking", ""))
+                thinking_blocks.append({
+                    "type": "thinking",
+                    "thinking": getattr(block, "thinking", ""),
+                    "signature": getattr(block, "signature", None),
+                })
+            elif block.type == "redacted_thinking":
+                thinking_blocks.append({
+                    "type": "redacted_thinking",
+                    "data": getattr(block, "data", ""),
+                })
             elif block.type == "tool_use":
                 tool_calls.append(
                     ToolCall(id=block.id, name=block.name, arguments=block.input)
@@ -179,6 +199,7 @@ class AnthropicModel(Model):
             usage=usage,
             reasoning="".join(reasoning_parts) or None,
             stop_reason=resp.stop_reason,
+            thinking_blocks=thinking_blocks,
         )
 
 

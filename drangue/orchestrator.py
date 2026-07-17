@@ -91,6 +91,8 @@ def fold(events: list) -> State:
                 assistant["tool_calls"] = [
                     {"id": c.id, "name": c.name, "arguments": c.arguments} for c in calls
                 ]
+            if e.payload.get("thinking_blocks"):
+                assistant["thinking_blocks"] = e.payload["thinking_blocks"]
             messages.append(assistant)
             current_calls = calls
             results = {}

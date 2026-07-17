@@ -93,17 +93,23 @@ class Executor:
             span.set("reasoning", resp.reasoning)
             span.set("duration_ms", duration)
 
+        payload = {
+            "text": resp.text,
+            "tool_calls": tool_calls,
+            "usage": resp.usage,
+            "reasoning": resp.reasoning,
+            "model": model_name,
+            "stop_reason": resp.stop_reason,
+        }
+        if getattr(resp, "thinking_blocks", None):
+            # Signed provider blocks that must be re-sent verbatim next turn;
+            # recording them is what lets a resumed run re-render the same
+            # conversation (see AnthropicModel._render_messages).
+            payload["thinking_blocks"] = resp.thinking_blocks
         return Event(
             seq=step.seq, type="model_decision",
             ts=started, duration_ms=duration,
-            payload={
-                "text": resp.text,
-                "tool_calls": tool_calls,
-                "usage": resp.usage,
-                "reasoning": resp.reasoning,
-                "model": model_name,
-                "stop_reason": resp.stop_reason,
-            },
+            payload=payload,
         )
 
     async def _run_tool(self, step, *, idempotency_key: str, tracer) -> Event:

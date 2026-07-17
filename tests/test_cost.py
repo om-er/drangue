@@ -303,6 +303,46 @@ async def test_anthropic_usage_captures_cache_tokens():
     }
 
 
+async def test_thinking_blocks_survive_the_round_trip_to_the_next_turn():
+    # With extended thinking + tool use, Anthropic requires the SIGNED
+    # thinking blocks re-sent at the start of the prior assistant turn;
+    # dropping them 400s the second step of every tool-using run.
+    class ThinkingFake:
+        def __init__(self):
+            self.calls = []
+            self.messages = SimpleNamespace(create=self._create)
+
+        async def _create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                content = [
+                    SimpleNamespace(type="thinking", thinking="let me add",
+                                    signature="sig-abc"),
+                    SimpleNamespace(type="tool_use", id="c1", name="add",
+                                    input={"a": 2, "b": 3}),
+                ]
+            else:
+                content = [SimpleNamespace(type="text", text="it is 5")]
+            return SimpleNamespace(content=content, usage=None, stop_reason="tool_use")
+
+    fake = ThinkingFake()
+    model = AnthropicModel("claude-test", client=fake)
+    result = await Agent(model=model, tools=[add]).run("2+3?")
+
+    assert result.output == "it is 5"
+    # The second request's assistant turn starts with the signed thinking block.
+    second = fake.calls[1]["messages"]
+    assistant = [m for m in second if m["role"] == "assistant"][0]
+    assert assistant["content"][0] == {
+        "type": "thinking", "thinking": "let me add", "signature": "sig-abc",
+    }
+    assert assistant["content"][1]["type"] == "tool_use"
+    # And the blocks are recorded in the log, so a RESUMED run re-renders the
+    # same conversation.
+    decision = [e for e in result.events if e.type == "model_decision"][0]
+    assert decision.payload["thinking_blocks"][0]["signature"] == "sig-abc"
+
+
 async def test_anthropic_does_not_send_an_idempotency_header():
     # Anthropic has no request idempotency key; the param is accepted for
     # interface parity but must not be sent (it would be a silent no-op).
