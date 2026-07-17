@@ -2,24 +2,34 @@
 
 from __future__ import annotations
 
-_DIM = "\033[2m"
-_BLUE = "\033[34m"
-_GREEN = "\033[32m"
-_RESET = "\033[0m"
+import os
+import sys
+
+
+def _codes() -> tuple[str, str, str, str]:
+    """(dim, blue, green, reset), or empty strings when color would be noise.
+
+    ANSI escapes are garbage in a redirected file or a non-VT terminal, and
+    NO_COLOR (https://no-color.org) is an explicit opt-out either way.
+    """
+    if os.environ.get("NO_COLOR") or not getattr(sys.stdout, "isatty", lambda: False)():
+        return "", "", "", ""
+    return "\033[2m", "\033[34m", "\033[32m", "\033[0m"
 
 
 def _emit(name: str, attrs: dict) -> None:
+    dim, blue, green, reset = _codes()
     if name == "model":
         text = attrs.get("text") or ""
         if text.strip():
-            print(f"{_BLUE}*{_RESET} model  {text}")
+            print(f"{blue}*{reset} model  {text}")
         for c in attrs.get("tool_calls") or []:
             args = ", ".join(f"{k}={v!r}" for k, v in c["arguments"].items())
-            print(f"{_GREEN}*{_RESET} tool   {c['name']}({args})")
+            print(f"{green}*{reset} tool   {c['name']}({args})")
     elif name == "tool":
         content = attrs.get("content") or ""
         preview = content if len(content) <= 200 else content[:200] + "..."
-        print(f"{_DIM}       -> {preview}{_RESET}")
+        print(f"{dim}       -> {preview}{reset}")
     elif name == "run":
         print()
 

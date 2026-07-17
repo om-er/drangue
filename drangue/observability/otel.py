@@ -15,7 +15,7 @@ import typing as t
 
 def _attr(value: t.Any):
     # OpenTelemetry attributes must be primitives; flatten the rest to JSON.
-    if isinstance(value, (str, bool, int, float)) or value is None:
+    if isinstance(value, (str, bool, int, float)):
         return value
     return json.dumps(value, default=str)
 
@@ -32,11 +32,13 @@ class _OTelSpan:
         self._cm = self._otel_tracer.start_as_current_span(self._name)
         self._span = self._cm.__enter__()
         for key, value in self._attrs.items():
-            self._span.set_attribute(key, _attr(value))
+            self.set(key, value)
         return self
 
     def set(self, key, value):
-        if self._span is not None:
+        # OTel rejects None attributes (logs a warning, drops them); an absent
+        # value is simply not an attribute.
+        if self._span is not None and value is not None:
             self._span.set_attribute(key, _attr(value))
 
     def __exit__(self, *exc):

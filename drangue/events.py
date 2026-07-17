@@ -67,14 +67,21 @@ class Result:
 
     @property
     def usage(self) -> dict:
-        """Total token usage across the run."""
-        inp = out = 0
+        """Total token usage across the run.
+
+        Always carries `input_tokens` and `output_tokens`; when a step
+        reported cached-prompt counts (`cache_creation_input_tokens`,
+        `cache_read_input_tokens` — disjoint from `input_tokens`), those
+        totals ride alongside.
+        """
+        totals: dict = {"input_tokens": 0, "output_tokens": 0}
         for e in self.events:
             u = e.payload.get("usage") if e.type == "model_decision" else None
             if u:
-                inp += u.get("input_tokens", 0)
-                out += u.get("output_tokens", 0)
-        return {"input_tokens": inp, "output_tokens": out}
+                for k, v in u.items():
+                    if isinstance(v, (int, float)):
+                        totals[k] = totals.get(k, 0) + v
+        return totals
 
     def cost(self, prices: dict, *, strict: bool = True) -> float:
         """Total dollar cost of the run, given a price table.

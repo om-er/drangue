@@ -77,6 +77,54 @@ async def test_console_tracer_prints_when_trace_true():
     assert "5" in out
 
 
+async def test_console_tracer_emits_no_ansi_when_not_a_tty():
+    # A StringIO has no isatty()=True, so a redirected trace must be plain
+    # text — escape codes are garbage in files and CI logs.
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        await Agent(model=_model(), tools=[add]).run("2 + 3", trace=True)
+    assert "\033[" not in buf.getvalue()
+
+
+def test_otel_span_drops_none_attributes():
+    from drangue.observability.otel import OTelTracer
+
+    recorded = {}
+
+    class FakeSpan:
+        def set_attribute(self, key, value):
+            recorded[key] = value
+
+    class FakeCM:
+        def __enter__(self):
+            return FakeSpan()
+
+        def __exit__(self, *exc):
+            return False
+
+    class FakeOtelTracer:
+        def start_as_current_span(self, name):
+            return FakeCM()
+
+    tracer = OTelTracer(otel_tracer=FakeOtelTracer())
+    with tracer.span("model", model=None, seq=1) as span:
+        span.set("reasoning", None)      # absent value: not an attribute
+        span.set("text", "hi")
+        span.set("ok", False)            # falsy but real values still land
+    assert recorded == {"seq": 1, "text": "hi", "ok": False}
+
+
+async def test_event_ts_is_the_step_start():
+    import time
+
+    before = time.time()
+    result = await Agent(model=_model(), tools=[add]).run("2 + 3")
+    decision = [e for e in result.events if e.type == "model_decision"][0]
+    # ts is stamped when the step starts, so it cannot be after ts+duration
+    # and cannot precede the run itself.
+    assert before <= decision.ts <= decision.ts + (decision.duration_ms or 0) / 1000 + 1
+
+
 async def test_silent_by_default():
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):

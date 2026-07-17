@@ -49,6 +49,7 @@ class Executor:
     async def _run_model(self, step, *, system, messages, idempotency_key, tracer) -> Event:
         model = self.router.choose(messages=messages, step_index=step.index)
         model_name = getattr(model, "model", None)
+        started = time.time()   # Event.ts is the step's start, by contract
         t0 = time.monotonic()
         with tracer.span("model", seq=step.seq, model=model_name) as span:
             resp = await model.generate(
@@ -68,7 +69,7 @@ class Executor:
 
         return Event(
             seq=step.seq, type="model_decision",
-            ts=time.time(), duration_ms=duration,
+            ts=started, duration_ms=duration,
             payload={
                 "text": resp.text,
                 "tool_calls": tool_calls,
@@ -80,6 +81,7 @@ class Executor:
 
     async def _run_tool(self, step, *, idempotency_key: str, tracer) -> Event:
         call = step.call
+        started = time.time()   # Event.ts is the step's start, by contract
         t0 = time.monotonic()
         with tracer.span("tool", seq=step.seq, name=call.name,
                          arguments=call.arguments) as span:
@@ -90,7 +92,7 @@ class Executor:
 
         return Event(
             seq=step.seq, type="tool_result",
-            ts=time.time(), duration_ms=duration,
+            ts=started, duration_ms=duration,
             payload={"call_id": call.id, "name": call.name, "content": content},
         )
 
