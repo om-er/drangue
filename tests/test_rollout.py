@@ -97,6 +97,50 @@ async def test_assisted_pauses_then_resumes_on_approval():
     assert model.calls == 2          # resumed and finished
 
 
+async def test_approve_with_nothing_pending_is_an_error_not_a_junk_event():
+    model = ScriptedModel([ModelResponse(text="done")])
+    agent = Agent(model=model, tools=[])
+    await agent.run("go", run_id="r-none")
+
+    for decide in (agent.approve, agent.reject):
+        try:
+            await decide("r-none")
+            assert False, "expected ValueError: nothing is pending"
+        except ValueError as exc:
+            assert "no pending approval" in str(exc)
+
+    # The log gained no approval_granted{call_id: None} garbage.
+    events = await agent.store.load("r-none")
+    assert not [e for e in events if e.type.startswith("approval_")]
+
+
+async def test_approving_a_call_id_that_is_not_pending_is_an_error():
+    ran = []
+
+    @tool
+    def act(x: int) -> str:
+        """Act."""
+        ran.append(x)
+        return "acted"
+
+    agent = Agent(model=_make(act, ran), tools=[act],
+                  autonomy=Autonomy(modes={"act": "assisted"}))
+    paused = await agent.run("go", run_id="r-typo")
+    assert paused.status == "paused"
+
+    try:
+        await agent.approve("r-typo", call_id="not-a-real-call")
+        assert False, "expected ValueError for a call_id matching nothing"
+    except ValueError as exc:
+        assert "not pending" in str(exc)
+
+    # The real approval still works afterwards.
+    await agent.approve("r-typo", call_id="c1")
+    result = await agent.resume("r-typo")
+    assert result.output == "done"
+    assert ran == [1]
+
+
 async def test_assisted_rejection_blocks_the_action():
     ran = []
 

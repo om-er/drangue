@@ -14,6 +14,7 @@ from .errors import (
     RateLimitError,
     ToolError,
     TransientError,
+    UnknownRunError,
     ValidationError,
 )
 from .evals import (
@@ -59,6 +60,7 @@ __all__ = [
     "AuthError",
     "RateLimitError",
     "ValidationError",
+    "UnknownRunError",
     "Event",
     "Result",
     "Span",

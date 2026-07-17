@@ -20,6 +20,7 @@ import uuid
 from . import rollout
 from .context import RunContext
 from .engine import EventSourcedEngine
+from .errors import UnknownRunError
 from .events import Event, Result
 from .executor import Executor
 from .models import AnthropicModel
@@ -128,6 +129,12 @@ class Agent:
 
     async def resume(self, run_id: str, *, trace: bool = False) -> Result:
         """Resume a run (e.g. after an approval). Alias for run with a run_id."""
+        if not await self.store.load(run_id):
+            # A typo'd run_id must not silently start a brand-new empty run.
+            raise UnknownRunError(
+                f"run {run_id!r} not found in the store; resume replays an "
+                "existing log, it cannot start one"
+            )
         return await self.run(run_id=run_id, trace=trace)
 
     async def remember(self, item) -> None:
@@ -141,10 +148,25 @@ class Agent:
         events = await self.store.load(run_id)
         return rollout.pending_approvals(events)
 
+    @staticmethod
+    def _resolve_pending(events, call_id, run_id) -> str:
+        """The pending call a decision applies to; raise rather than record junk."""
+        pending = [p["call_id"] for p in rollout.pending_approvals(events)]
+        if call_id is None:
+            if not pending:
+                raise ValueError(f"run {run_id!r} has no pending approval to decide")
+            return pending[0]
+        if call_id not in pending:
+            raise ValueError(
+                f"call {call_id!r} is not pending approval in run {run_id!r} "
+                f"(pending: {pending})"
+            )
+        return call_id
+
     async def approve(self, run_id: str, call_id: str | None = None) -> None:
         """Approve a pending action. Defaults to the one pending approval."""
         events = await self.store.load(run_id)
-        cid = call_id or rollout.first_pending_call(events)
+        cid = self._resolve_pending(events, call_id, run_id)
         await self.store.append(run_id, Event(
             seq=rollout.next_seq(events), type="approval_granted",
             payload={"call_id": cid}))
@@ -153,7 +175,7 @@ class Agent:
                      reason: str = "") -> None:
         """Reject a pending action; the agent is told and continues."""
         events = await self.store.load(run_id)
-        cid = call_id or rollout.first_pending_call(events)
+        cid = self._resolve_pending(events, call_id, run_id)
         await self.store.append(run_id, Event(
             seq=rollout.next_seq(events), type="approval_denied",
             payload={"call_id": cid, "reason": reason}))

@@ -46,24 +46,41 @@ class EventSourcedEngine:
         tracer = ctx.tracer or NullTracer()
 
         with tracer.span("run", run_id=run_id) as run_span:
-            if not await store.load(run_id):
+            existing = await store.load(run_id)
+            if not existing:
                 started = Event(seq=0, type="run_started", payload={"input": input})
                 await store.append(run_id, started)
                 if emit:
                     await emit(started)
+            elif input:
+                recorded = next((e.payload.get("input", "") for e in existing
+                                 if e.type == "run_started"), "")
+                if input != recorded:
+                    # Silently replaying the old run's answer for a new
+                    # question is the worst possible interpretation; refuse.
+                    raise ValueError(
+                        f"run {run_id!r} already exists with a different input "
+                        f"({recorded!r}). Follow-up messages into an existing "
+                        "run are not supported; resume it with "
+                        "agent.resume(run_id) or start a new run_id."
+                    )
 
-                # Input guardrail: a blocked input ends the run before any work.
-                reason = await executor.check_input(input)
+            # Input guardrail: a blocked input ends the run before any model
+            # work. This runs from the RECORDED input, so a resumed run that
+            # crashed before its first step is vetted too, not just fresh ones.
+            events = await store.load(run_id)
+            state = fold(events)
+            if state.model_calls == 0 and not state.finished:
+                reason = await executor.check_input(state.input)
                 if reason is not None:
-                    events = await store.load(run_id)
                     output = f"(blocked: {reason})"
-                    blocked = Event(seq=rollout.next_seq(events), type="run_finished",
+                    blocked = Event(seq=state.next_seq, type="run_finished",
                                     payload={"output": output, "blocked": True})
                     await store.append(run_id, blocked)
                     if emit:
                         await emit(blocked)
                     events = events + [blocked]
-                    return Result(output=output, messages=fold(events).messages,
+                    return Result(output=output, messages=state.messages,
                                   events=events)
 
             while True:
@@ -74,12 +91,14 @@ class EventSourcedEngine:
                 # recorded, so a resumed run replays it instead of re-querying,
                 # and the orchestrator stays a pure function of the log. Expiry is
                 # honored here against a recorded timestamp; a failing recall is
-                # non-fatal (record empty and proceed without memory).
+                # non-fatal (record empty and proceed without memory). Recall
+                # keys off the RECORDED input, so a resumed run queries the
+                # same memory the original would have.
                 if memory is not None and not state.recalled_done:
                     now = time.time()
                     error = None
                     try:
-                        items = await memory.recall(input)
+                        items = await memory.recall(state.input)
                     except Exception as exc:  # an enhancement must never crash the run
                         items, error = [], str(exc)
                     payload = {

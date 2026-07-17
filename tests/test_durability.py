@@ -102,6 +102,81 @@ async def test_side_effecting_tool_runs_exactly_once_across_resume():
     assert runs == ["r:2"]             # charged once, with the stable key for seq 2
 
 
+async def test_resume_of_an_unknown_run_id_raises():
+    from drangue import UnknownRunError
+
+    agent = Agent(model=ScriptedModel([ModelResponse(text="hi")]), tools=[add])
+    try:
+        await agent.resume("typo-run-id")
+        assert False, "expected UnknownRunError"
+    except UnknownRunError:
+        pass
+    # Nothing was appended: the typo did not silently create an empty run.
+    assert await agent.store.load("typo-run-id") == []
+
+
+async def test_run_with_a_different_input_on_an_existing_run_is_refused():
+    store = InMemoryStore()
+    model = ScriptedModel([ModelResponse(text="first answer"),
+                           ModelResponse(text="never reached")])
+    agent = Agent(model=model, tools=[add], store=store)
+    await agent.run("first question", run_id="r1")
+
+    try:
+        await agent.run("second question", run_id="r1")
+        assert False, "expected ValueError: the new input would be silently dropped"
+    except ValueError as exc:
+        assert "already exists" in str(exc)
+
+    # Re-running with the SAME input is the replay path and stays legal.
+    result = await agent.run("first question", run_id="r1")
+    assert result.output == "first answer"
+    assert model.calls == 1
+
+
+async def test_input_guard_still_applies_when_resuming_a_pre_step_crash():
+    # A run that crashed after run_started but before any model work must be
+    # vetted on resume; the fresh-run branch is not the only door in.
+    from drangue import Guardrails
+    from drangue.events import Event
+
+    store = InMemoryStore()
+    await store.append("r-crashed", Event(seq=0, type="run_started",
+                                          payload={"input": "malicious input"}))
+
+    guard = Guardrails(input_guard=lambda text: "looks malicious" if "malicious" in text else None)
+    model = ScriptedModel([ModelResponse(text="should never run")])
+    agent = Agent(model=model, tools=[add], store=store, guardrails=guard)
+
+    result = await agent.resume("r-crashed")
+    assert result.output == "(blocked: looks malicious)"
+    assert model.calls == 0
+
+
+async def test_memory_recall_on_resume_uses_the_recorded_input():
+    from drangue.events import Event
+
+    queries = []
+
+    class SpyMemory:
+        async def recall(self, query):
+            queries.append(query)
+            return []
+
+        async def remember(self, item):
+            pass
+
+    store = InMemoryStore()
+    await store.append("r-mem", Event(seq=0, type="run_started",
+                                      payload={"input": "the real question"}))
+
+    model = ScriptedModel([ModelResponse(text="done")])
+    agent = Agent(model=model, tools=[add], store=store, memory=SpyMemory())
+    await agent.resume("r-mem")
+
+    assert queries == ["the real question"]   # not the empty live input
+
+
 async def test_idempotency_key_is_stable_and_hidden_from_the_model():
     captured = {}
 

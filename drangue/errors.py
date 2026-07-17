@@ -36,3 +36,7 @@ class RateLimitError(TransientError):
 
 class ValidationError(ToolError):
     """The response did not match the expected contract (schema drift)."""
+
+
+class UnknownRunError(KeyError):
+    """A run_id that does not exist in the store was asked to resume."""
