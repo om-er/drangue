@@ -7,6 +7,7 @@ and builds the JSON schema for you. No manual schema, no Pydantic required.
 from __future__ import annotations
 
 import inspect
+import types
 import typing as t
 from dataclasses import dataclass
 
@@ -27,6 +28,8 @@ def _json_type(annotation: t.Any) -> dict:
     origin = t.get_origin(annotation)
 
     if origin is None:
+        if annotation is type(None):
+            return {"type": "null"}
         return {"type": _PY_TO_JSON.get(annotation, "string")}
 
     if origin in (list, tuple):
@@ -37,10 +40,20 @@ def _json_type(annotation: t.Any) -> dict:
     if origin is dict:
         return {"type": "object"}
 
-    if origin is t.Union:
-        # Optional[X] / Union[X, None]: use the first non-None member.
-        members = [a for a in t.get_args(annotation) if a is not type(None)]
-        return _json_type(members[0]) if members else {"type": "string"}
+    if origin is t.Literal:
+        return {"enum": list(t.get_args(annotation))}
+
+    # typing.Union covers Optional[X] / Union[...]; types.UnionType is PEP 604
+    # (`int | None`), which get_origin reports as a distinct origin.
+    if origin in (t.Union, types.UnionType):
+        schemas = [_json_type(a) for a in t.get_args(annotation)]
+        if all(set(s) == {"type"} for s in schemas):
+            merged: list[str] = []
+            for s in schemas:
+                if s["type"] not in merged:
+                    merged.append(s["type"])
+            return {"type": merged[0] if len(merged) == 1 else merged}
+        return {"anyOf": schemas}
 
     return {"type": "string"}
 

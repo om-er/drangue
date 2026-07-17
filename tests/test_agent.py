@@ -50,6 +50,42 @@ def test_schema_is_generated_from_signature():
     assert set(schema["input_schema"]["required"]) == {"a", "b"}
 
 
+def test_schema_handles_pep604_unions():
+    from typing import Optional, Union, Literal
+
+    @tool
+    def f(a: int | None = None, b: str | int = "x",
+          c: Optional[float] = None, d: Union[int, None] = None,
+          e: Literal["on", "off"] = "on") -> str:
+        """Doc."""
+        return ""
+
+    props = f.to_schema()["input_schema"]["properties"]
+    assert props["a"]["type"] == ["integer", "null"]
+    assert props["b"]["type"] == ["string", "integer"]
+    assert props["c"]["type"] == ["number", "null"]
+    assert props["d"]["type"] == ["integer", "null"]
+    assert props["e"] == {"enum": ["on", "off"]}
+    # Defaulted params are not required.
+    assert "required" not in f.to_schema()["input_schema"]
+
+
+def test_schema_optional_without_default_is_required_but_nullable():
+    from typing import Optional
+
+    @tool
+    def f(a: Optional[int], items: list[int | None] = ()) -> str:
+        """Doc."""
+        return ""
+
+    schema = f.to_schema()["input_schema"]
+    assert schema["properties"]["a"]["type"] == ["integer", "null"]
+    assert schema["required"] == ["a"]
+    assert schema["properties"]["items"] == {
+        "type": "array", "items": {"type": ["integer", "null"]},
+    }
+
+
 async def test_unknown_tool_is_reported_not_raised():
     bad = ToolCall("x", "nope", {})
     model = ScriptedModel([
