@@ -17,7 +17,12 @@ import time
 
 from .events import Event
 from .guardrails import blocked_result
-from .hardening import run_tool, unknown_tool_error
+from .hardening import (
+    MALFORMED_ARGS_KEY,
+    malformed_arguments_error,
+    run_tool,
+    unknown_tool_error,
+)
 from .orchestrator import ModelStep, ToolStep
 
 
@@ -93,6 +98,10 @@ class Executor:
         tool = self.tools.get(call.name)
         if tool is None:
             return unknown_tool_error(call.name)
+        if MALFORMED_ARGS_KEY in call.arguments:
+            # The adapter could not parse what the model sent; report it as a
+            # clean failure the model can correct instead of invoking the tool.
+            return malformed_arguments_error(call.name, call.arguments[MALFORMED_ARGS_KEY])
         # Enforce guardrails in code, regardless of what the model decided.
         if self.guardrails is not None:
             reason = await self.guardrails.check_tool(tool, call.arguments)

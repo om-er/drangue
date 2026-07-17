@@ -142,6 +142,23 @@ def unknown_tool_error(name: str) -> str:
     })
 
 
+# When an adapter cannot parse the arguments a model sent (small local models
+# emit truncated or invalid JSON routinely), it records the raw text under this
+# key instead of crashing the run. The executor turns it into a clean failure.
+MALFORMED_ARGS_KEY = "__drangue_malformed_arguments__"
+
+
+def malformed_arguments_error(name: str, raw: str) -> str:
+    return json.dumps({
+        "ok": False,
+        "tool": name,
+        "error": {
+            "category": "invalid_arguments",
+            "message": f"tool arguments were not valid JSON: {raw[:500]!r}",
+        },
+    })
+
+
 async def run_tool(tool, kwargs: dict, *, sleep=asyncio.sleep,
                    rand: t.Callable[[], float] = random.random) -> str:
     """Invoke a tool under its policy and return content for the model."""

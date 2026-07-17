@@ -88,6 +88,71 @@ async def test_idempotency_key_is_sent_as_a_header():
     assert client.calls[0]["extra_headers"]["Idempotency-Key"] == "run-1:1"
 
 
+async def test_reasoning_models_get_max_completion_tokens():
+    client = FakeOpenAIClient([_resp(content="ok")])
+    model = OpenAIModel("o3-mini", client=client)
+    await model.generate(system="", messages=[{"role": "user", "content": "hi"}],
+                         tools=[])
+
+    sent = client.calls[0]
+    assert "max_tokens" not in sent
+    assert sent["max_completion_tokens"] == 4096
+
+
+async def test_explicit_max_completion_tokens_drops_the_legacy_param():
+    client = FakeOpenAIClient([_resp(content="ok")])
+    model = OpenAIModel("some-proxy-model", client=client,
+                        max_completion_tokens=512)
+    await model.generate(system="", messages=[{"role": "user", "content": "hi"}],
+                         tools=[])
+
+    sent = client.calls[0]
+    assert "max_tokens" not in sent          # never send both; the API 400s
+    assert sent["max_completion_tokens"] == 512
+
+
+async def test_non_reasoning_models_keep_max_tokens():
+    client = FakeOpenAIClient([_resp(content="ok")])
+    model = OpenAIModel("llama3.1", client=client)
+    await model.generate(system="", messages=[{"role": "user", "content": "hi"}],
+                         tools=[])
+
+    assert client.calls[0]["max_tokens"] == 4096
+
+
+async def test_malformed_tool_arguments_become_a_clean_failure():
+    import json
+
+    client = FakeOpenAIClient([
+        _resp(tool_calls=[_tc("c1", "add", '{"a": 2, "b": ')]),   # truncated JSON
+        _resp(content="recovered"),
+    ])
+    agent = Agent(model=OpenAIModel("test", client=client), tools=[add])
+    result = await agent.run("go")
+
+    assert result.output == "recovered"      # the run survives
+    tool_result = [e for e in result.events if e.type == "tool_result"][0]
+    parsed = json.loads(tool_result.payload["content"])
+    assert parsed["ok"] is False
+    assert parsed["error"]["category"] == "invalid_arguments"
+    assert '{"a": 2, "b": ' in parsed["error"]["message"]
+
+
+async def test_non_object_tool_arguments_become_a_clean_failure():
+    import json
+
+    client = FakeOpenAIClient([
+        _resp(tool_calls=[_tc("c1", "add", '[1, 2]')]),   # valid JSON, wrong shape
+        _resp(content="recovered"),
+    ])
+    agent = Agent(model=OpenAIModel("test", client=client), tools=[add])
+    result = await agent.run("go")
+
+    assert result.output == "recovered"
+    tool_result = [e for e in result.events if e.type == "tool_result"][0]
+    assert json.loads(tool_result.payload["content"])["error"]["category"] == "invalid_arguments"
+
+
 async def test_tool_results_use_the_tool_role_keyed_by_call_id():
     client = FakeOpenAIClient([
         _resp(tool_calls=[_tc("c1", "add", '{"a": 1, "b": 1}')]),

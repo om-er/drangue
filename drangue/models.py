@@ -18,6 +18,8 @@ import json
 import typing as t
 from dataclasses import dataclass, field
 
+from .hardening import MALFORMED_ARGS_KEY
+
 
 @dataclass
 class ToolCall:
@@ -232,15 +234,30 @@ class OpenAIModel(Model):
                 })
         return out
 
+    # Model families that reject the legacy `max_tokens` parameter and require
+    # `max_completion_tokens`. Third-party OpenAI-compatible backends (Ollama,
+    # DeepSeek, Groq, ...) still expect `max_tokens`, so this stays a prefix
+    # check on OpenAI's own reasoning-model names rather than a blanket switch.
+    _MAX_COMPLETION_TOKENS_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
     async def generate(self, *, system, messages, tools, idempotency_key=None):
+        token_param = (
+            "max_completion_tokens"
+            if self.model.lower().startswith(self._MAX_COMPLETION_TOKENS_PREFIXES)
+            else "max_tokens"
+        )
         params: dict = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            token_param: self.max_tokens,
             "messages": self._render_messages(system, messages),
         }
         if tools:
             params["tools"] = self._to_openai_tools([tool.to_schema() for tool in tools])
         params.update(self.kwargs)
+        if "max_completion_tokens" in params:
+            # A caller passing the newer param (or a matched prefix) must not
+            # also send the legacy one; the API rejects requests with both.
+            params.pop("max_tokens", None)
 
         # Request-level idempotency (OpenAI-compatible backends honor this header):
         # if the process dies after the call returns but before the decision is
@@ -259,10 +276,18 @@ class OpenAIModel(Model):
 
         tool_calls: list[ToolCall] = []
         for tc in (message.tool_calls or []):
+            raw = tc.function.arguments or "{}"
+            try:
+                arguments = json.loads(raw)
+            except json.JSONDecodeError:
+                arguments = {MALFORMED_ARGS_KEY: raw}
+            else:
+                if not isinstance(arguments, dict):
+                    arguments = {MALFORMED_ARGS_KEY: raw}
             tool_calls.append(ToolCall(
                 id=tc.id,
                 name=tc.function.name,
-                arguments=json.loads(tc.function.arguments or "{}"),
+                arguments=arguments,
             ))
 
         u = getattr(resp, "usage", None)
