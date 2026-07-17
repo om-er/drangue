@@ -299,12 +299,12 @@ and the production-grade durability the docstrings advertise.
   execution, so THAT crash window is detected on resume (`unknown_outcome`
   failure) rather than re-executed; model calls deliberately do not, because a
   re-called model is a double charge, not a double side effect.
-- **No per-run lease.** Two live processes driving the same run_id are
-  serialized per event: the store raises `ConflictError` on a seq collision and
-  the losing engine discards its result and folds the winner's. But both
-  processes may still EXECUTE a step before one loses the append race. Crash
-  recovery is safe; live double-driving needs a lease (or an engine like
-  Temporal that provides one).
+- **Per-run leases are store-dependent.** Stores that implement
+  `acquire_lease`/`release_lease` (both built-ins and drangue-postgres do) get
+  one live driver per run: a second process receives `LeaseHeldError` and a
+  dead owner's lease lapses on its TTL. A custom store without lease support
+  falls back to per-event serialization via `ConflictError`, where both
+  processes may still execute a step before one loses the append race.
 - **Sync-tool timeouts bound the caller, not the work.** `wait_for` cannot cancel
   a worker thread, so a timed-out sync tool keeps running. Timeouts are therefore
   NOT retried by default (a retry could run concurrently with the orphaned first

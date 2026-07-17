@@ -36,10 +36,11 @@ import asyncio
 import time
 
 import json
+import uuid
 import warnings
 
 from .. import rollout
-from ..errors import ConflictError
+from ..errors import ConflictError, LeaseHeldError
 from ..events import Event, Result
 from ..hardening import _classify, unknown_outcome_error
 from ..memory import item_to_dict, live_items, render_context
@@ -120,7 +121,33 @@ async def _append_shielded(store, run_id: str, event: Event, emit) -> bool:
 
 
 class EventSourcedEngine:
+    def __init__(self, lease_ttl: float = 60.0):
+        self.lease_ttl = lease_ttl
+
     async def run(self, ctx) -> Result:
+        """Drive the run, holding the per-run lease when the store offers one.
+
+        A lease means one LIVE driver per run: a second process gets a clear
+        LeaseHeldError instead of silently racing the first. A dead owner's
+        lease lapses on its TTL, so crash recovery is unaffected. Stores
+        without lease support keep the previous behavior (conflict-abort per
+        event).
+        """
+        store = ctx.store
+        if not hasattr(store, "acquire_lease"):
+            return await self._drive(ctx, lease_owner=None)
+        owner = uuid.uuid4().hex
+        if not await store.acquire_lease(ctx.run_id, owner, self.lease_ttl):
+            raise LeaseHeldError(ctx.run_id)
+        try:
+            return await self._drive(ctx, lease_owner=owner)
+        finally:
+            try:
+                await store.release_lease(ctx.run_id, owner)
+            except Exception:  # noqa: BLE001 - releasing best-effort on unwind
+                pass
+
+    async def _drive(self, ctx, lease_owner: str | None) -> Result:
         run_id = ctx.run_id
         orchestrator = ctx.orchestrator
         executor = ctx.executor
@@ -235,6 +262,13 @@ class EventSourcedEngine:
                                      payload={"text": text}))
 
             while True:
+                # Renew the lease each iteration; losing it means another
+                # process took over after our TTL lapsed, and continuing
+                # would mean two live drivers.
+                if lease_owner is not None and not await store.acquire_lease(
+                        run_id, lease_owner, self.lease_ttl):
+                    raise LeaseHeldError(run_id)
+
                 state = fold(events)
 
                 # Recall once, before the first model step. The result is

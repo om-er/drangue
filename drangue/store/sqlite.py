@@ -23,6 +23,7 @@ import asyncio
 import json
 import sqlite3
 import threading
+import time
 
 from ..errors import ConflictError
 from ..events import Event
@@ -40,6 +41,11 @@ class SQLiteStore:
             "  run_id TEXT, seq INTEGER, type TEXT, payload TEXT,"
             "  ts REAL, duration_ms REAL,"
             "  PRIMARY KEY (run_id, seq)"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS leases ("
+            "  run_id TEXT PRIMARY KEY, owner TEXT, expires_at REAL"
             ")"
         )
         self._conn.commit()
@@ -83,6 +89,40 @@ class SQLiteStore:
                 (run_id,),
             )
             return cur.fetchall()
+
+    # Per-run lease: one live driver per run, across processes. Reentrant for
+    # the same owner (re-acquiring is how the engine renews); a dead owner's
+    # lease lapses on its TTL, so crash recovery needs no cleanup step.
+    async def acquire_lease(self, run_id: str, owner: str, ttl_s: float) -> bool:
+        return await asyncio.to_thread(self._acquire_lease, run_id, owner, ttl_s)
+
+    def _acquire_lease(self, run_id: str, owner: str, ttl_s: float) -> bool:
+        with self._lock:
+            now = time.time()
+            row = self._conn.execute(
+                "SELECT owner, expires_at FROM leases WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is not None and row[0] != owner and row[1] > now:
+                return False
+            self._conn.execute(
+                "INSERT OR REPLACE INTO leases (run_id, owner, expires_at) "
+                "VALUES (?, ?, ?)",
+                (run_id, owner, now + ttl_s),
+            )
+            self._conn.commit()
+            return True
+
+    async def release_lease(self, run_id: str, owner: str) -> None:
+        await asyncio.to_thread(self._release_lease, run_id, owner)
+
+    def _release_lease(self, run_id: str, owner: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM leases WHERE run_id = ? AND owner = ?",
+                (run_id, owner),
+            )
+            self._conn.commit()
 
     def close(self) -> None:
         with self._lock:

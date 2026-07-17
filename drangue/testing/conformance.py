@@ -98,6 +98,29 @@ async def check_store_idempotent_append(make_store) -> None:
         "the original event must survive a conflicting append"
 
 
+async def check_store_lease(make_store) -> None:
+    """Opt-in: the per-run lease contract (one live driver per run).
+
+    acquire_lease(run_id, owner, ttl_s) must be reentrant for the same owner
+    (re-acquiring is renewal), exclusive against a different live owner, and
+    open again after release or TTL lapse.
+    """
+    s = make_store()
+    assert await s.acquire_lease("r", "a", 60.0) is True, "first acquire must win"
+    assert await s.acquire_lease("r", "a", 60.0) is True, \
+        "the same owner must be able to re-acquire (renewal)"
+    assert await s.acquire_lease("r", "b", 60.0) is False, \
+        "a live lease must exclude a different owner"
+    await s.release_lease("r", "a")
+    assert await s.acquire_lease("r", "b", 60.0) is True, \
+        "a released lease must be acquirable"
+
+    s = make_store()
+    assert await s.acquire_lease("x", "dead", 0.0) is True
+    assert await s.acquire_lease("x", "next", 60.0) is True, \
+        "an expired lease must lapse without an explicit release"
+
+
 async def check_store_with_agent(make_store) -> None:
     """End-to-end: an Agent backed by this store runs and replays on resume."""
     from ..agent import Agent

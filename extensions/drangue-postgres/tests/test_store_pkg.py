@@ -11,6 +11,7 @@ import os
 from drangue.testing import (
     check_store,
     check_store_idempotent_append,
+    check_store_lease,
     check_store_with_agent,
 )
 
@@ -29,4 +30,5 @@ async def test_postgres_store_conforms():
         return
     await check_store(_make)
     await check_store_idempotent_append(_make)   # durable store promises this
+    await check_store_lease(_make)
     await check_store_with_agent(_make)

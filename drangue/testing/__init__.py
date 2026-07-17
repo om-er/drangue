@@ -18,6 +18,7 @@ from .conformance import (
     check_router,
     check_store,
     check_store_idempotent_append,
+    check_store_lease,
     check_store_with_agent,
     check_tracer,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "RecordingTracer",
     "check_store",
     "check_store_idempotent_append",
+    "check_store_lease",
     "check_store_with_agent",
     "check_engine",
     "check_memory",

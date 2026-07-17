@@ -11,6 +11,7 @@ from .engine import Engine, EventSourcedEngine
 from .errors import (
     AuthError,
     ConflictError,
+    LeaseHeldError,
     PermanentError,
     RateLimitError,
     ToolError,
@@ -63,6 +64,7 @@ __all__ = [
     "ValidationError",
     "UnknownRunError",
     "ConflictError",
+    "LeaseHeldError",
     "Event",
     "Result",
     "Span",

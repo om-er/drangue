@@ -42,6 +42,22 @@ class UnknownRunError(KeyError):
     """A run_id that does not exist in the store was asked to resume."""
 
 
+class LeaseHeldError(Exception):
+    """Another live process holds the lease on this run.
+
+    Raised by the engine at run start (or mid-run, if the lease is lost) when
+    the store supports leasing. Crash recovery is unaffected: a dead owner's
+    lease lapses on its TTL and the run becomes resumable.
+    """
+
+    def __init__(self, run_id: str):
+        super().__init__(
+            f"run {run_id!r} is being driven by another live process; retry "
+            "after its lease lapses or stop that process first"
+        )
+        self.run_id = run_id
+
+
 class ConflictError(Exception):
     """A DIFFERENT event was appended at an occupied (run_id, seq).
 

@@ -13,6 +13,8 @@ table; in normal use the default is fine.
 
 from __future__ import annotations
 
+import time
+
 import psycopg
 from psycopg.types.json import Jsonb
 
@@ -38,6 +40,11 @@ class PostgresStore:
                 "  run_id TEXT, seq INTEGER, type TEXT, payload JSONB,"
                 "  ts DOUBLE PRECISION, duration_ms DOUBLE PRECISION,"
                 "  PRIMARY KEY (run_id, seq))"
+            )
+            await self._conn.execute(
+                f"CREATE TABLE IF NOT EXISTS {self.table}_leases ("
+                "  run_id TEXT PRIMARY KEY, owner TEXT,"
+                "  expires_at DOUBLE PRECISION)"
             )
         return self._conn
 
@@ -73,6 +80,28 @@ class PostgresStore:
         # psycopg returns JSONB as a Python object already.
         return [Event(seq=r[0], type=r[1], payload=r[2], ts=r[3], duration_ms=r[4])
                 for r in rows]
+
+    # Per-run lease (drangue.testing.check_store_lease): reentrant for the
+    # same owner, exclusive against a live one, lapses on its TTL.
+    async def acquire_lease(self, run_id: str, owner: str, ttl_s: float) -> bool:
+        conn = await self._connection()
+        now = time.time()
+        cur = await conn.execute(
+            f"INSERT INTO {self.table}_leases AS l (run_id, owner, expires_at) "
+            "VALUES (%s, %s, %s) "
+            "ON CONFLICT (run_id) DO UPDATE "
+            "SET owner = EXCLUDED.owner, expires_at = EXCLUDED.expires_at "
+            f"WHERE l.owner = EXCLUDED.owner OR l.expires_at <= %s",
+            (run_id, owner, now + ttl_s, now),
+        )
+        return cur.rowcount == 1
+
+    async def release_lease(self, run_id: str, owner: str) -> None:
+        conn = await self._connection()
+        await conn.execute(
+            f"DELETE FROM {self.table}_leases WHERE run_id = %s AND owner = %s",
+            (run_id, owner),
+        )
 
     async def close(self) -> None:
         if self._conn is not None:

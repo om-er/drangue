@@ -26,6 +26,7 @@ from drangue.testing import (
     check_router,
     check_store,
     check_store_idempotent_append,
+    check_store_lease,
     check_store_with_agent,
     check_tracer,
 )
@@ -36,6 +37,7 @@ async def test_in_memory_store_conforms():
     # The dev store makes the same append promises as the durable ones, so
     # behavior does not quietly change when a durable store is swapped in.
     await check_store_idempotent_append(InMemoryStore)
+    await check_store_lease(InMemoryStore)
     await check_store_with_agent(InMemoryStore)
 
 
@@ -52,6 +54,7 @@ async def test_sqlite_store_conforms():
     try:
         await check_store(make)
         await check_store_idempotent_append(make)   # durable store promises this
+        await check_store_lease(make)
         await check_store_with_agent(make)
     finally:
         # A SQLiteStore holds its connection open for its lifetime, and Windows
