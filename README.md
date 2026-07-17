@@ -65,15 +65,68 @@ full event log the run was driven from.
 
 ## Drive the loop yourself
 
-`stream` yields each event as it is appended to the log, so you stay in control:
+`stream` yields each event as it is appended to the log, plus live token
+chunks (`model_delta`) while the model is still talking, so you stay in
+control:
 
 ```python
 async for event in agent.stream("Is the orders service healthy?"):
-    if event.type == "model_decision":
+    if event.type == "model_delta":
+        print(event.payload["text"], end="", flush=True)   # live tokens
+    elif event.type == "model_decision":
         for call in event.payload["tool_calls"]:
             print("calling", call["name"], call["arguments"])
     elif event.type == "run_finished":
         print(event.payload["output"])
+```
+
+Deltas are ephemeral: they stream to you but are never stored, so the recorded
+log stays the source of truth and replays are unchanged.
+
+## Conversations
+
+A completed run accepts follow-up turns: same `run_id`, new input. Each turn
+is a recorded `user_message` event, so a conversation resumes after a crash
+and replays deterministically like any other run:
+
+```python
+first = await agent.run("what is 2+2?", run_id="chat-7")
+second = await agent.run("and double that?", run_id="chat-7")   # sees turn one
+```
+
+A run that is mid-flight or paused refuses a new input; repeating the latest
+turn's input replays it instead of duplicating it.
+
+## Structured output
+
+Constrain the final answer to a JSON schema. The model delivers through a
+synthetic `final_answer` tool; the runtime validates, records, and retries a
+nonconforming answer with the errors spelled out:
+
+```python
+schema = {"type": "object", "required": ["answer"],
+          "properties": {"answer": {"type": "integer"}}}
+
+result = await agent.run("what is 2+3?", output_schema=schema)
+result.output_parsed   # {"answer": 5}, validated
+```
+
+The schema is recorded at run start, so a resumed run keeps the original
+contract. A run that exhausts its corrections finishes with plain text and
+`output_parsed` is None, so a miss is visible instead of guessed at.
+
+## MCP servers as tool packs
+
+Any Model Context Protocol server's tools become ordinary drangue tools with
+`pip install drangue-mcp`; guardrails, autonomy, and the event log apply to
+them unchanged:
+
+```python
+from drangue_mcp import stdio_toolset
+
+async with stdio_toolset("npx", ["-y", "@modelcontextprotocol/server-filesystem", "/data"]) as toolset:
+    agent = Agent("claude-opus-4-8", tools=toolset.tools)
+    result = await agent.run("what is in /data?")
 ```
 
 ## Cost control
@@ -142,6 +195,10 @@ def fetch_metrics(service: str) -> str:
         raise RateLimitError(retry_after=resp.headers["Retry-After"])  # retried, honoring the hint
     return resp.text
 ```
+
+Independent sibling calls run concurrently when it is safe (every call
+autonomous, every tool reversible) and serially otherwise, with results
+recorded in call order so replay is deterministic either way.
 
 The wrapper applies, in order: timeout, classify the failure, retry transient
 ones with jittered exponential backoff (reusing the idempotency key), validate
@@ -266,6 +323,13 @@ marker before it runs, so that crash window is *detected* on resume (the model
 receives a clean `unknown_outcome` failure) instead of re-executed; plain
 reversible tools and model calls are at-least-once.
 
+Two more properties ride on the log. The run's config (max_steps, autonomy
+modes, the tool set) is recorded at start, so a resumed run decides as the
+original was configured, not as the agent happens to be configured today. And
+stores that support leasing (both built-ins and drangue-postgres do) allow one
+live driver per run: a second process gets a clear `LeaseHeldError`, while a
+dead process's lease lapses on its TTL so crash recovery needs no cleanup.
+
 ```python
 from drangue import Agent, SQLiteStore
 
@@ -362,6 +426,9 @@ The current focus is the production core (`ROADMAP.md`):
 - Done: eval harness and deploy gates (statistical scoring across correctness,
   safety, and efficiency; baseline-relative gating; LLM judge; scenarios grown
   from production failures).
+- Done: token streaming, multi-turn conversations, parallel sibling tool
+  calls, structured output, recorded run config, per-run leases, and MCP
+  servers as tool packs (drangue-mcp).
 
 All of Chapters 4 to 12 are implemented (Phases 0 to 7).
 
