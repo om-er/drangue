@@ -7,19 +7,38 @@ survives process death and resumes exactly.
 
     replay log -> reconstruct state
     while not done:
-        step = orchestrator.next(state)        # deterministic
-        if step already recorded: fold and continue   # replay path
-        else: execute, append before continuing        # first-run path
+        step = orchestrator.next(state)        # deterministic; replay is just
+        execute, append, fold the new event    # folding recorded events first
+
+Two windows get special treatment:
+
+  - A consumer breaking out of `agent.stream` cancels the engine task. If the
+    cancellation lands between a completed side effect and its append, the log
+    would say the step never happened and a resume would re-execute it — so
+    the append of an executed step is shielded from cancellation and always
+    completes.
+  - A crash between executing and recording cannot be shielded. For tools
+    marked `reversible=False`, a `step_started` intent event is appended
+    BEFORE execution; a resume that finds the intent without a result knows
+    the outcome is unknown and refuses to blindly re-execute (the model gets
+    a clean `unknown_outcome` failure instead). Reversible tools and model
+    calls stay at-least-once, as documented.
+
+What this does NOT provide: a lease. Two live processes driving the same
+run_id concurrently are serialized per-event by the store's ConflictError
+(the loser discards its result and folds the winner's), but both may still
+execute a step before one loses the append race.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from .. import rollout
 from ..errors import ConflictError
 from ..events import Event, Result
-from ..hardening import _classify
+from ..hardening import _classify, unknown_outcome_error
 from ..memory import item_to_dict, live_items, render_context
 from ..observability import NullTracer
 from ..orchestrator import Done, ModelStep, ToolStep, fold
@@ -50,6 +69,32 @@ async def _append(store, run_id: str, event: Event, emit) -> bool:
     return True
 
 
+async def _append_shielded(store, run_id: str, event: Event, emit) -> bool:
+    """Like _append, but the write completes even if this task is cancelled.
+
+    Used for the record of an EXECUTED step: once the side effect has
+    happened, losing its append (a consumer breaking out of `stream` cancels
+    the engine mid-await) would make a resume re-execute it.
+    """
+    write = asyncio.ensure_future(store.append(run_id, event))
+    try:
+        await asyncio.shield(write)
+    except asyncio.CancelledError:
+        # We are being cancelled; the shielded write is not. Let it land
+        # before unwinding, then propagate the cancellation.
+        if not write.done():
+            try:
+                await write
+            except Exception:  # noqa: BLE001 - already unwinding on cancel
+                pass
+        raise
+    except ConflictError:
+        return False
+    if emit:
+        await emit(event)
+    return True
+
+
 class EventSourcedEngine:
     async def run(self, ctx) -> Result:
         run_id = ctx.run_id
@@ -65,14 +110,15 @@ class EventSourcedEngine:
         tracer = ctx.tracer or NullTracer()
 
         with tracer.span("run", run_id=run_id) as run_span:
-            existing = await store.load(run_id)
-            if not existing:
+            events = await store.load(run_id)
+            if not events:
                 started = Event(seq=0, type="run_started", payload={"input": input})
                 await store.append(run_id, started)
                 if emit:
                     await emit(started)
+                events = [started]
             elif input:
-                recorded = next((e.payload.get("input", "") for e in existing
+                recorded = next((e.payload.get("input", "") for e in events
                                  if e.type == "run_started"), "")
                 if input != recorded:
                     # Silently replaying the old run's answer for a new
@@ -84,8 +130,12 @@ class EventSourcedEngine:
                         "agent.resume(run_id) or start a new run_id."
                     )
 
+            # Intent events THIS process appended. An unresolved step_started
+            # that is NOT in here came from a dead process, and its outcome is
+            # unknown (see the irreversible-tool handling below).
+            started_here: set = set()
+
             while True:
-                events = await store.load(run_id)
                 state = fold(events)
 
                 # Recall once, before the first model step. The result is
@@ -110,8 +160,11 @@ class EventSourcedEngine:
                         payload["error"] = error
                     recalled = Event(seq=state.next_seq, type="memory_recalled",
                                      payload=payload)
-                    await _append(store, run_id, recalled, emit)
-                    continue   # reload either way: our recall or the winner's
+                    if await _append(store, run_id, recalled, emit):
+                        events = events + [recalled]
+                    else:
+                        events = await store.load(run_id)   # fold the winner's
+                    continue
 
                 step = orchestrator.next(state)
 
@@ -126,6 +179,7 @@ class EventSourcedEngine:
                         blocked = Event(seq=state.next_seq, type="run_finished",
                                         payload={"output": output, "blocked": True})
                         if not await _append(store, run_id, blocked, emit):
+                            events = await store.load(run_id)
                             continue
                         run_span.set("output", output)
                         return Result(output=output, messages=state.messages,
@@ -153,8 +207,9 @@ class EventSourcedEngine:
                         finished = Event(seq=state.next_seq, type="run_finished",
                                          payload={"output": step.output})
                         if not await _append(store, run_id, finished, emit):
+                            events = await store.load(run_id)
                             continue   # a concurrent writer got there; re-decide
-                        events = await store.load(run_id)
+                        events = events + [finished]
                     return Result(output=step.output, messages=state.messages, events=events)
 
                 # Per-action autonomy (Chapter 12): shadow proposes without
@@ -165,39 +220,74 @@ class EventSourcedEngine:
                     if action == "paused":
                         return paused
                     if action == "handled":
+                        events = await store.load(run_id)
                         continue
                     # action == "execute": fall through to normal execution.
 
-                # Already recorded? Then this is a replay; fold it and move on.
-                recorded = next((e for e in events if e.seq == step.seq), None)
-                if recorded is None:
-                    key = f"{run_id}:{step.seq}"
-                    try:
-                        produced = await executor.run(
-                            step, system=_compose_system(system, state.recalled),
-                            messages=state.messages, idempotency_key=key, tracer=tracer,
-                        )
-                    except Exception as exc:
-                        # Record the failure before propagating it, so the
-                        # persisted run reads "failed", not "running" forever.
-                        # The exception still reaches the caller; a later
-                        # resume retries from this point (fold skips the
-                        # run_failed marker).
-                        failed = Event(seq=state.next_seq, type="run_failed",
+                # Irreversible tools get an intent marker BEFORE execution, so
+                # a crash between the side effect and its record is detectable.
+                if isinstance(step, ToolStep):
+                    tool = executor.tools.get(step.call.name)
+                    if tool is not None and not tool.reversible:
+                        if (step.call.id in state.started
+                                and step.call.id not in started_here):
+                            # Orphaned intent from a dead process: the effect
+                            # may or may not have happened. Refuse to blindly
+                            # re-execute; give the model a clean failure.
+                            ev = Event(seq=state.next_seq, type="tool_result",
                                        payload={
-                                           "error": str(exc) or type(exc).__name__,
-                                           "category": _classify(exc),
+                                           "call_id": step.call.id,
+                                           "name": step.call.name,
+                                           "content": unknown_outcome_error(step.call.name),
                                        })
-                        # Best-effort: if a concurrent writer claimed the seq,
-                        # the log already moved on; the original exception is
-                        # what matters.
-                        await _append(store, run_id, failed, emit)
-                        raise
-                    if not await _append(store, run_id, produced, emit):
-                        # Our step lost a write race (a concurrent resume of
-                        # this run_id). The winner's event is truth; discard
-                        # ours, reload, and continue from the recorded log.
-                        continue
+                            if await _append(store, run_id, ev, emit):
+                                events = events + [ev]
+                            else:
+                                events = await store.load(run_id)
+                            continue
+                        if step.call.id not in state.started:
+                            intent = Event(seq=state.next_seq, type="step_started",
+                                           payload={"call_id": step.call.id,
+                                                    "tool": step.call.name})
+                            if await _append(store, run_id, intent, emit):
+                                events = events + [intent]
+                                started_here.add(step.call.id)
+                            else:
+                                events = await store.load(run_id)
+                            continue
+                        # else: intent recorded by us this process — execute.
+
+                key = f"{run_id}:{step.seq}"
+                try:
+                    produced = await executor.run(
+                        step, system=_compose_system(system, state.recalled),
+                        messages=state.messages, idempotency_key=key, tracer=tracer,
+                    )
+                except Exception as exc:
+                    # Record the failure before propagating it, so the
+                    # persisted run reads "failed", not "running" forever.
+                    # The exception still reaches the caller; a later
+                    # resume retries from this point (fold skips the
+                    # run_failed marker).
+                    failed = Event(seq=state.next_seq, type="run_failed",
+                                   payload={
+                                       "error": str(exc) or type(exc).__name__,
+                                       "category": _classify(exc),
+                                   })
+                    # Best-effort: if a concurrent writer claimed the seq,
+                    # the log already moved on; the original exception is
+                    # what matters.
+                    await _append(store, run_id, failed, emit)
+                    raise
+                # The step has EXECUTED; its record must land even if we are
+                # cancelled right now (a consumer breaking out of stream()).
+                if not await _append_shielded(store, run_id, produced, emit):
+                    # Our step lost a write race (a concurrent resume of this
+                    # run_id). The winner's event is truth; discard ours,
+                    # reload, and continue from the recorded log.
+                    events = await store.load(run_id)
+                    continue
+                events = events + [produced]
 
     async def _apply_autonomy(self, step, autonomy, events, state, run_id, store,
                               run_span, emit):

@@ -102,6 +102,112 @@ async def test_side_effecting_tool_runs_exactly_once_across_resume():
     assert runs == ["r:2"]             # charged once, with the stable key for seq 2
 
 
+async def test_breaking_out_of_stream_does_not_lose_an_executed_step():
+    import asyncio
+
+    executed = []
+
+    @tool
+    def act(x: int) -> str:
+        """A side effect."""
+        executed.append(x)
+        return "acted"
+
+    class SlowAppendStore(InMemoryStore):
+        """Yields control inside append, so a pending cancellation (from the
+        consumer's break) is delivered mid-write — the crash window."""
+
+        async def append(self, run_id, event):
+            await asyncio.sleep(0)
+            await super().append(run_id, event)
+
+    store = SlowAppendStore()
+    model = ScriptedModel([
+        ModelResponse(tool_calls=[ToolCall("c1", "act", {"x": 1})]),
+        ModelResponse(text="done"),
+    ])
+    agent = Agent(model=model, tools=[act], store=store)
+
+    stream = agent.stream("go", run_id="r-stream")
+    async for ev in stream:
+        if ev.type == "tool_result":
+            break                       # consumer walks away mid-run
+    # Closing the stream cancels the engine task deterministically (a bare
+    # break defers generator cleanup to GC). The cancellation lands mid-step;
+    # the shielded append must still record whatever already executed.
+    await stream.aclose()
+
+    assert executed == [1]
+    events = await store.load("r-stream")
+    recorded = [e for e in events if e.type == "tool_result"]
+    assert len(recorded) == 1           # the executed step IS in the log
+
+    # Resuming completes without re-running the side effect.
+    result = await agent.resume("r-stream")
+    assert result.output == "done"
+    assert executed == [1]
+
+
+async def test_irreversible_tool_is_not_reexecuted_after_a_record_crash():
+    import json
+
+    executed = []
+
+    @tool(reversible=False)
+    def wire_funds(amount: int) -> str:
+        """Wire money (irreversible)."""
+        executed.append(amount)
+        return "wired"
+
+    class CrashAfterExecuteStore(InMemoryStore):
+        """Drops the tool_result append once, simulating a crash after the
+        side effect ran but before its record landed."""
+
+        def __init__(self):
+            super().__init__()
+            self.crashed = False
+
+        async def append(self, run_id, event):
+            if not self.crashed and event.type == "tool_result":
+                self.crashed = True
+                raise RuntimeError("process died before the record landed")
+            await super().append(run_id, event)
+
+    store = CrashAfterExecuteStore()
+    model = ScriptedModel([
+        ModelResponse(tool_calls=[ToolCall("c1", "wire_funds", {"amount": 100})]),
+    ])
+    agent = Agent(model=model, tools=[wire_funds], store=store)
+    try:
+        await agent.run("pay", run_id="r-wire")
+    except RuntimeError:
+        pass
+    assert executed == [100]            # the effect happened, unrecorded
+
+    # A new process resumes: the orphaned step_started intent means the
+    # outcome is unknown — the tool must NOT run again.
+    recovering = ScriptedModel([ModelResponse(text="escalating to a human")])
+    result = await Agent(model=recovering, tools=[wire_funds],
+                         store=store).run("pay", run_id="r-wire")
+
+    assert executed == [100]            # NOT re-executed
+    tool_results = [e for e in result.events if e.type == "tool_result"]
+    parsed = json.loads(tool_results[0].payload["content"])
+    assert parsed["error"]["category"] == "unknown_outcome"
+    assert result.output == "escalating to a human"
+
+
+async def test_reversible_tools_stay_at_least_once_with_no_intent_overhead():
+    store = InMemoryStore()
+    model = ScriptedModel([
+        ModelResponse(tool_calls=[ToolCall("c1", "add", {"a": 1, "b": 1})]),
+        ModelResponse(text="done"),
+    ])
+    result = await Agent(model=model, tools=[add], store=store).run("go", run_id="r-rev")
+    assert result.output == "done"
+    assert not [e for e in result.events if e.type == "step_started"]
+
+
 class RacingStore(InMemoryStore):
     """Injects a competitor's event at a chosen seq just before our append,
     simulating a second process resuming the same run concurrently."""

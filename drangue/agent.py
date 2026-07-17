@@ -194,7 +194,14 @@ class Agent:
 
     async def stream(self, input: str | None = None, *, run_id: str | None = None,
                      trace: bool = False) -> t.AsyncIterator[Event]:
-        """Yield each Event as it is appended to the log."""
+        """Yield each Event as it is appended to the log.
+
+        Stopping early: a bare `break` leaves the run driving in the
+        background until the generator is garbage-collected. To stop the run
+        promptly, close the stream (`contextlib.aclosing`, or call
+        `.aclose()`); the engine is then cancelled at its next step, and the
+        record of any step that already executed still lands in the store.
+        """
         queue: asyncio.Queue = asyncio.Queue()
         sentinel = object()
 

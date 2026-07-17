@@ -148,6 +148,24 @@ def unknown_tool_error(name: str) -> str:
 MALFORMED_ARGS_KEY = "__drangue_malformed_arguments__"
 
 
+def unknown_outcome_error(name: str) -> str:
+    """The clean failure for an irreversible tool whose previous attempt was
+    interrupted between executing and recording (see step_started events)."""
+    return json.dumps({
+        "ok": False,
+        "tool": name,
+        "error": {
+            "category": "unknown_outcome",
+            "message": (
+                f"a previous attempt to run '{name}' was interrupted between "
+                "execution and recording; the side effect may or may not have "
+                "happened. This tool is marked irreversible, so it was NOT "
+                "re-executed. Verify the outcome out of band before retrying."
+            ),
+        },
+    })
+
+
 def malformed_arguments_error(name: str, raw: str) -> str:
     return json.dumps({
         "ok": False,

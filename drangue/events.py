@@ -15,6 +15,9 @@ Event types:
     tool_result     payload: {call_id, name, content}
     run_finished    payload: {output}
     run_failed      payload: {error, category}   step crashed; resume retries it
+    step_started    payload: {call_id, tool}     intent marker appended before an
+                    irreversible tool executes, so a crash between the side
+                    effect and its record is detected instead of re-executed
 """
 
 from __future__ import annotations

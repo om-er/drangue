@@ -51,6 +51,8 @@ class State:
     recalled: list = field(default_factory=list)    # recalled memory items (dicts)
     recalled_done: bool = False                      # has a recall step happened?
     input: str = ""                                  # the recorded run input
+    started: set = field(default_factory=set)        # call_ids with a recorded
+                                                     # step_started but no result yet
 
 
 def fold(events: list) -> State:
@@ -65,12 +67,15 @@ def fold(events: list) -> State:
     recalled: list = []
     recalled_done = False
     input = ""
+    started: set = set()
 
     for e in events:
         next_seq = e.seq + 1
         if e.type == "run_started":
             input = e.payload.get("input", "")
             messages.append({"role": "user", "content": e.payload["input"]})
+        elif e.type == "step_started":
+            started.add(e.payload.get("call_id"))
         elif e.type == "memory_recalled":
             recalled = e.payload.get("items", [])
             recalled_done = True
@@ -95,6 +100,7 @@ def fold(events: list) -> State:
         elif e.type == "tool_result":
             cid = e.payload["call_id"]
             results[cid] = e.payload["content"]
+            started.discard(cid)
             messages.append({
                 "role": "tool",
                 "call_id": cid,
@@ -116,6 +122,7 @@ def fold(events: list) -> State:
         recalled=recalled,
         recalled_done=recalled_done,
         input=input,
+        started=started,
     )
 
 
