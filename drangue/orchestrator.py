@@ -58,6 +58,8 @@ class State:
     output_schema: dict | None = None                 # recorded structured-output
                                                       # contract, if any
     schema_feedback_count: int = 0                    # corrective retries so far
+    config: dict | None = None                        # recorded run config
+                                                      # (max_steps, autonomy, tools)
 
 
 def fold(events: list) -> State:
@@ -76,12 +78,14 @@ def fold(events: list) -> State:
     finish_recorded = False
     output_schema = None
     schema_feedback_count = 0
+    config = None
 
     for e in events:
         next_seq = e.seq + 1
         if e.type == "run_started":
             input = e.payload.get("input", "")
             output_schema = e.payload.get("output_schema")
+            config = e.payload.get("config")
             messages.append({"role": "user", "content": e.payload["input"]})
         elif e.type == "schema_feedback":
             # A recorded correction: the model's final answer missed the
@@ -153,6 +157,7 @@ def fold(events: list) -> State:
         finish_recorded=finish_recorded,
         output_schema=output_schema,
         schema_feedback_count=schema_feedback_count,
+        config=config,
     )
 
 
@@ -167,6 +172,12 @@ class Orchestrator:
             return Done(state.output)
         if state.pending:
             return ToolStep(seq=state.next_seq, call=state.pending[0])
-        if state.model_calls >= self.max_steps:
-            return Done(f"(stopped: reached max_steps={self.max_steps})")
+        # The RECORDED limit wins over the live one, so a resumed run makes
+        # the same decisions the original would have (config drift between
+        # run and resume must not rewrite history).
+        max_steps = self.max_steps
+        if state.config and state.config.get("max_steps") is not None:
+            max_steps = state.config["max_steps"]
+        if state.model_calls >= max_steps:
+            return Done(f"(stopped: reached max_steps={max_steps})")
         return ModelStep(seq=state.next_seq, index=state.model_calls)

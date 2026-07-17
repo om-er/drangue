@@ -36,6 +36,7 @@ import asyncio
 import time
 
 import json
+import warnings
 
 from .. import rollout
 from ..errors import ConflictError
@@ -139,6 +140,16 @@ class EventSourcedEngine:
                 if ctx.output_schema is not None:
                     # Recorded, so a resumed run keeps the original contract.
                     payload["output_schema"] = ctx.output_schema
+                # Config that shapes decisions is recorded too: a resumed run
+                # must decide as the ORIGINAL was configured to, not as the
+                # agent happens to be configured today.
+                payload["config"] = {
+                    "max_steps": getattr(orchestrator, "max_steps", None),
+                    "autonomy": ({"default": autonomy.default,
+                                  "modes": dict(autonomy.modes)}
+                                 if autonomy is not None else None),
+                    "tools": sorted(executor.tools),
+                }
                 started = Event(seq=0, type="run_started", payload=payload)
                 await store.append(run_id, started)
                 if emit:
@@ -191,6 +202,23 @@ class EventSourcedEngine:
                             "only accepted on a completed run; resume this "
                             "one with agent.resume(run_id) first."
                         )
+
+            # Honor the RECORDED config over the live one. Old logs without a
+            # config block fall back to the live agent's settings.
+            cfg = next((e.payload.get("config") for e in events
+                        if e.type == "run_started"), None)
+            if cfg is not None:
+                acfg = cfg.get("autonomy")
+                autonomy = (rollout.Autonomy(default=acfg["default"],
+                                             modes=dict(acfg.get("modes") or {}))
+                            if acfg else None)
+                recorded_tools = set(cfg.get("tools") or [])
+                if recorded_tools != set(executor.tools):
+                    warnings.warn(
+                        f"run {run_id!r} was recorded with tools "
+                        f"{sorted(recorded_tools)} but the agent now has "
+                        f"{sorted(executor.tools)}; the live tools are what "
+                        "will execute", stacklevel=2)
 
             # Intent events THIS process appended. An unresolved step_started
             # that is NOT in here came from a dead process, and its outcome is
