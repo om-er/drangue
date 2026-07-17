@@ -65,7 +65,8 @@ def test_schema_handles_pep604_unions():
     assert props["b"]["type"] == ["string", "integer"]
     assert props["c"]["type"] == ["number", "null"]
     assert props["d"]["type"] == ["integer", "null"]
-    assert props["e"] == {"enum": ["on", "off"]}
+    assert props["e"]["enum"] == ["on", "off"]
+    assert props["e"]["default"] == "on"
     # Defaulted params are not required.
     assert "required" not in f.to_schema()["input_schema"]
 

@@ -6,9 +6,12 @@ and builds the JSON schema for you. No manual schema, no Pydantic required.
 
 from __future__ import annotations
 
+import enum
 import inspect
+import re
 import types
 import typing as t
+import warnings
 from dataclasses import dataclass, replace
 
 from .hardening import DEFAULT_BACKOFF, ToolPolicy, _UNSET, make_policy
@@ -23,18 +26,27 @@ _PY_TO_JSON = {
 }
 
 
-def _json_type(annotation: t.Any) -> dict:
-    """Map a Python type annotation to a JSON Schema fragment."""
+def _json_type(annotation: t.Any, unknown: list | None = None) -> dict:
+    """Map a Python type annotation to a JSON Schema fragment.
+
+    Annotations with no mapping degrade to "string"; when a collector list is
+    passed they are recorded so the decorator can WARN instead of silently
+    advertising the wrong contract to the model.
+    """
     origin = t.get_origin(annotation)
 
     if origin is None:
         if annotation is type(None):
             return {"type": "null"}
+        if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
+            return {"enum": [m.value for m in annotation]}
+        if annotation not in _PY_TO_JSON and unknown is not None:
+            unknown.append(getattr(annotation, "__name__", repr(annotation)))
         return {"type": _PY_TO_JSON.get(annotation, "string")}
 
     if origin in (list, tuple):
         args = t.get_args(annotation)
-        item = _json_type(args[0]) if args else {"type": "string"}
+        item = _json_type(args[0], unknown) if args else {"type": "string"}
         return {"type": "array", "items": item}
 
     if origin is dict:
@@ -46,7 +58,7 @@ def _json_type(annotation: t.Any) -> dict:
     # typing.Union covers Optional[X] / Union[...]; types.UnionType is PEP 604
     # (`int | None`), which get_origin reports as a distinct origin.
     if origin in (t.Union, types.UnionType):
-        schemas = [_json_type(a) for a in t.get_args(annotation)]
+        schemas = [_json_type(a, unknown) for a in t.get_args(annotation)]
         if all(set(s) == {"type"} for s in schemas):
             merged: list[str] = []
             for s in schemas:
@@ -55,7 +67,47 @@ def _json_type(annotation: t.Any) -> dict:
             return {"type": merged[0] if len(merged) == 1 else merged}
         return {"anyOf": schemas}
 
+    if unknown is not None:
+        unknown.append(str(annotation))
     return {"type": "string"}
+
+
+_ARG_LINE = re.compile(r"^(\w+)\s*(?:\([^)]*\))?\s*:\s*(.+)$")
+_SECTION_ENDERS = {"returns", "raises", "yields", "examples", "notes", "attributes"}
+
+
+def _docstring_args(doc: str | None) -> dict[str, str]:
+    """Per-parameter descriptions from a Google-style Args: section.
+
+    Schema quality is prompt quality: a described parameter is one the model
+    fills correctly more often. Unrecognized layouts simply yield nothing.
+    """
+    out: dict[str, str] = {}
+    in_args = False
+    current: str | None = None
+    for raw in (doc or "").splitlines():
+        stripped = raw.strip()
+        header = stripped.rstrip(":").lower()
+        if stripped.endswith(":") and header in ("args", "arguments", "parameters"):
+            in_args, current = True, None
+            continue
+        if not in_args:
+            continue
+        if stripped.endswith(":") and header in _SECTION_ENDERS:
+            break
+        if not stripped:
+            current = None
+            continue
+        m = _ARG_LINE.match(stripped)
+        if m:
+            current = m.group(1)
+            out[current] = m.group(2).strip()
+        elif current is not None:
+            out[current] += " " + stripped   # a wrapped continuation line
+    return out
+
+
+_JSON_SAFE = (str, int, float, bool, type(None))
 
 
 # Parameters the runtime injects, hidden from the model-facing schema.
@@ -129,8 +181,11 @@ def tool(func: t.Callable | None = None, *, name: str | None = None,
         except Exception:
             hints = {}
 
+        doc = inspect.getdoc(fn)
+        arg_docs = _docstring_args(doc)
         properties: dict = {}
         required: list[str] = []
+        unknown: list[str] = []
 
         for pname, param in sig.parameters.items():
             if pname in ("self", "cls"):
@@ -139,11 +194,29 @@ def tool(func: t.Callable | None = None, *, name: str | None = None,
                 continue
             if pname in RESERVED_PARAMS:
                 continue  # runtime-injected; never shown to or filled by the model
-            properties[pname] = _json_type(hints.get(pname, str))
+            prop = _json_type(hints.get(pname, str), unknown)
+            if pname in arg_docs:
+                prop["description"] = arg_docs[pname]
             if param.default is inspect.Parameter.empty:
                 required.append(pname)
+            else:
+                default = param.default
+                if isinstance(default, enum.Enum):
+                    default = default.value
+                if isinstance(default, _JSON_SAFE):
+                    prop["default"] = default
+            properties[pname] = prop
 
-        parameters: dict = {"type": "object", "properties": properties}
+        if unknown:
+            warnings.warn(
+                f"tool '{name or fn.__name__}': annotations with no JSON "
+                f"schema mapping ({', '.join(sorted(set(unknown)))}) are "
+                "advertised to the model as strings",
+                stacklevel=3,
+            )
+
+        parameters: dict = {"type": "object", "properties": properties,
+                            "additionalProperties": False}
         if required:
             parameters["required"] = required
 
