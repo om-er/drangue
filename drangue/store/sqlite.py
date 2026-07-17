@@ -4,11 +4,17 @@ This is what turns the in-process replay of Phase 0/1 into real crash recovery:
 the log outlives the process. Point an Agent at one and a run can be resumed in a
 brand new process by passing its run_id.
 
-The primary key (run_id, seq) plus INSERT OR IGNORE makes appends idempotent:
-the event at a given seq is immutable, so a retried append after a crash between
-"append" and "continue" is a no-op rather than a duplicate. SQLite calls are
-blocking, so they run off the event loop via asyncio.to_thread, serialized by a
-lock.
+The primary key (run_id, seq) makes the event at a given seq immutable. A
+retried append of the SAME event (a crash between "append" and "continue") is
+an idempotent no-op; a DIFFERENT event at an occupied seq raises ConflictError,
+because silently dropping either side of that race loses an approval or
+re-executes a side effect.
+
+Concurrency: WAL mode plus a busy timeout let a second process (say, an
+approval CLI) write while a run is in flight, instead of dying on "database is
+locked". In-process, the single shared connection is serialized by a
+threading.Lock — an asyncio.Lock would only serialize within one event loop,
+and SQLite calls run in worker threads via asyncio.to_thread.
 """
 
 from __future__ import annotations
@@ -16,15 +22,19 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import threading
 
+from ..errors import ConflictError
 from ..events import Event
 
 
 class SQLiteStore:
     def __init__(self, path: str):
         self.path = path
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS events ("
             "  run_id TEXT, seq INTEGER, type TEXT, payload TEXT,"
@@ -35,21 +45,30 @@ class SQLiteStore:
         self._conn.commit()
 
     async def append(self, run_id: str, event: Event) -> None:
-        async with self._lock:
-            await asyncio.to_thread(self._append, run_id, event)
+        await asyncio.to_thread(self._append, run_id, event)
 
     def _append(self, run_id: str, event: Event) -> None:
-        self._conn.execute(
-            "INSERT OR IGNORE INTO events "
-            "(run_id, seq, type, payload, ts, duration_ms) VALUES (?, ?, ?, ?, ?, ?)",
-            (run_id, event.seq, event.type, json.dumps(event.payload),
-             event.ts, event.duration_ms),
-        )
-        self._conn.commit()
+        payload = json.dumps(event.payload)
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO events "
+                    "(run_id, seq, type, payload, ts, duration_ms) VALUES (?, ?, ?, ?, ?, ?)",
+                    (run_id, event.seq, event.type, payload,
+                     event.ts, event.duration_ms),
+                )
+                self._conn.commit()
+            except sqlite3.IntegrityError:
+                row = self._conn.execute(
+                    "SELECT type, payload FROM events WHERE run_id = ? AND seq = ?",
+                    (run_id, event.seq),
+                ).fetchone()
+                if row is not None and row[0] == event.type and row[1] == payload:
+                    return  # a retried append of the same immutable event
+                raise ConflictError(run_id, event.seq) from None
 
     async def load(self, run_id: str) -> list[Event]:
-        async with self._lock:
-            rows = await asyncio.to_thread(self._load, run_id)
+        rows = await asyncio.to_thread(self._load, run_id)
         return [
             Event(seq=r[0], type=r[1], payload=json.loads(r[2]),
                   ts=r[3], duration_ms=r[4])
@@ -57,12 +76,14 @@ class SQLiteStore:
         ]
 
     def _load(self, run_id: str):
-        cur = self._conn.execute(
-            "SELECT seq, type, payload, ts, duration_ms FROM events "
-            "WHERE run_id = ? ORDER BY seq",
-            (run_id,),
-        )
-        return cur.fetchall()
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT seq, type, payload, ts, duration_ms FROM events "
+                "WHERE run_id = ? ORDER BY seq",
+                (run_id,),
+            )
+            return cur.fetchall()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()

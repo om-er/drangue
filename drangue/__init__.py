@@ -10,6 +10,7 @@ from .budget import Budget
 from .engine import Engine, EventSourcedEngine
 from .errors import (
     AuthError,
+    ConflictError,
     PermanentError,
     RateLimitError,
     ToolError,
@@ -61,6 +62,7 @@ __all__ = [
     "RateLimitError",
     "ValidationError",
     "UnknownRunError",
+    "ConflictError",
     "Event",
     "Result",
     "Span",

@@ -33,6 +33,9 @@ from drangue.testing import (
 
 async def test_in_memory_store_conforms():
     await check_store(InMemoryStore)
+    # The dev store makes the same append promises as the durable ones, so
+    # behavior does not quietly change when a durable store is swapped in.
+    await check_store_idempotent_append(InMemoryStore)
     await check_store_with_agent(InMemoryStore)
 
 

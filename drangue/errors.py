@@ -40,3 +40,21 @@ class ValidationError(ToolError):
 
 class UnknownRunError(KeyError):
     """A run_id that does not exist in the store was asked to resume."""
+
+
+class ConflictError(Exception):
+    """A DIFFERENT event was appended at an occupied (run_id, seq).
+
+    An identical retry of the same append is an idempotent no-op; this is the
+    other case — two writers raced to the same position in the log. Losing
+    either event silently could double-execute a side effect (a dropped
+    tool_result is re-run on the next fold) or lose a human's approval, so the
+    store must surface the collision instead of picking a winner quietly.
+    """
+
+    def __init__(self, run_id: str, seq: int, message: str = ""):
+        super().__init__(
+            message or f"run {run_id!r} already has a different event at seq {seq}"
+        )
+        self.run_id = run_id
+        self.seq = seq

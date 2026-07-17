@@ -60,19 +60,42 @@ async def check_store(make_store) -> None:
     await s.append("a", Event(seq=0, type="x", payload={}))
     assert await s.load("b") == [], "runs must be isolated by run_id"
 
-
-async def check_store_idempotent_append(make_store) -> None:
-    """Opt-in: a durable store should ignore a duplicate (run_id, seq) append.
-
-    The in-memory dev store does not promise this; durable stores should, so a
-    retried append after a crash cannot duplicate an immutable event.
-    """
+    # Loaded events are snapshots: mutating one must not rewrite the log.
     s = make_store()
     await s.append("r", Event(seq=0, type="x", payload={"v": 1}))
-    await s.append("r", Event(seq=0, type="x", payload={"v": 2}))   # same seq
+    (await s.load("r"))[0].payload["v"] = 999
+    assert (await s.load("r"))[0].payload == {"v": 1}, \
+        "mutating a loaded event's payload must not corrupt the stored log"
+
+
+async def check_store_idempotent_append(make_store) -> None:
+    """Opt-in for durable stores: retries are no-ops, collisions are loud.
+
+    A retried append of the SAME event (crash between append and continue)
+    must be ignored, so an immutable event cannot be duplicated. A DIFFERENT
+    event at an occupied (run_id, seq) is a write race; silently dropping
+    either side loses an approval or re-executes a side effect, so it must
+    raise drangue.ConflictError instead of picking a winner.
+    """
+    from ..errors import ConflictError
+
+    s = make_store()
+    await s.append("r", Event(seq=0, type="x", payload={"v": 1}))
+    await s.append("r", Event(seq=0, type="x", payload={"v": 1}))   # identical retry
     loaded = await s.load("r")
     assert len(loaded) == 1, \
-        "a store promising idempotent append must ignore a duplicate (run_id, seq)"
+        "a retried append of the same event must be an idempotent no-op"
+
+    try:
+        await s.append("r", Event(seq=0, type="x", payload={"v": 2}))
+        raise AssertionError(
+            "a conflicting append at an occupied (run_id, seq) must raise "
+            "ConflictError, not silently drop either event")
+    except ConflictError:
+        pass
+    loaded = await s.load("r")
+    assert len(loaded) == 1 and loaded[0].payload == {"v": 1}, \
+        "the original event must survive a conflicting append"
 
 
 async def check_store_with_agent(make_store) -> None:

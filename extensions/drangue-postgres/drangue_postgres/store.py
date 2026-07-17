@@ -1,9 +1,11 @@
 """Postgres-backed event store: a durable drangue Store battery.
 
 Mirrors the built-in SQLiteStore's contract (drangue.testing.check_store):
-append-only, ordered by seq, isolated by run_id, payload round-trips, and a
-duplicate (run_id, seq) is ignored so a retried append cannot duplicate an
-immutable event. Uses async psycopg; one instance per process, connecting lazily.
+append-only, ordered by seq, isolated by run_id, payload round-trips, a retried
+append of the same event is a no-op, and a DIFFERENT event at an occupied
+(run_id, seq) raises drangue.ConflictError instead of silently dropping either
+side of the race. Uses async psycopg; one instance per process, connecting
+lazily.
 
 The `table` parameter exists so conformance tests can isolate runs in their own
 table; in normal use the default is fine.
@@ -14,6 +16,7 @@ from __future__ import annotations
 import psycopg
 from psycopg.types.json import Jsonb
 
+from drangue.errors import ConflictError
 from drangue.events import Event
 
 _IDENT_OK = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
@@ -40,14 +43,24 @@ class PostgresStore:
 
     async def append(self, run_id: str, event: Event) -> None:
         conn = await self._connection()
-        await conn.execute(
-            f"INSERT INTO {self.table} "
-            "(run_id, seq, type, payload, ts, duration_ms) "
-            "VALUES (%s, %s, %s, %s, %s, %s) "
-            "ON CONFLICT (run_id, seq) DO NOTHING",
-            (run_id, event.seq, event.type, Jsonb(event.payload),
-             event.ts, event.duration_ms),
-        )
+        try:
+            await conn.execute(
+                f"INSERT INTO {self.table} "
+                "(run_id, seq, type, payload, ts, duration_ms) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (run_id, event.seq, event.type, Jsonb(event.payload),
+                 event.ts, event.duration_ms),
+            )
+        except psycopg.errors.UniqueViolation:
+            cur = await conn.execute(
+                f"SELECT type, payload FROM {self.table} "
+                "WHERE run_id = %s AND seq = %s",
+                (run_id, event.seq),
+            )
+            row = await cur.fetchone()
+            if row is not None and row[0] == event.type and row[1] == event.payload:
+                return  # a retried append of the same immutable event
+            raise ConflictError(run_id, event.seq) from None
 
     async def load(self, run_id: str) -> list[Event]:
         conn = await self._connection()
