@@ -52,10 +52,31 @@ async def test_transient_failure_is_retried_then_succeeds():
     async def fake_sleep(d):
         delays.append(d)
 
-    out = await run_tool(flaky, {}, sleep=fake_sleep)
+    out = await run_tool(flaky, {}, sleep=fake_sleep, rand=lambda: 1.0)
     assert out == "recovered"
     assert calls["n"] == 3
     assert delays == [1.0, 2.0]   # exponential backoff between the two retries
+
+
+async def test_backoff_is_jittered():
+    calls = {"n": 0}
+
+    @tool(retries=1, backoff=1.0)
+    def flaky() -> str:
+        """Flaky tool."""
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TransientError("blip")
+        return "ok"
+
+    delays = []
+
+    async def fake_sleep(d):
+        delays.append(d)
+
+    # Equal jitter: rand()=0.0 gives half the exponential ceiling.
+    await run_tool(flaky, {}, sleep=fake_sleep, rand=lambda: 0.0)
+    assert delays == [0.5]
 
 
 async def test_permanent_failure_is_not_retried():
@@ -95,6 +116,27 @@ async def test_rate_limit_respects_retry_after():
     assert delays == [2.0]        # honored Retry-After instead of computed backoff
 
 
+async def test_retry_after_is_not_clamped_to_max_backoff():
+    n = {"i": 0}
+
+    @tool(retries=1, max_backoff=30.0)
+    def hit() -> str:
+        """Rate-limited tool."""
+        n["i"] += 1
+        if n["i"] == 1:
+            raise RateLimitError("slow down", retry_after=120.0)
+        return "ok"
+
+    delays = []
+
+    async def fake_sleep(d):
+        delays.append(d)
+
+    out = await run_tool(hit, {}, sleep=fake_sleep)
+    assert out == "ok"
+    assert delays == [120.0]      # the server-mandated wait wins over our cap
+
+
 async def test_timeout_is_a_clean_failure():
     import asyncio
 
@@ -109,6 +151,39 @@ async def test_timeout_is_a_clean_failure():
     assert parsed["error"]["category"] == "timeout"
 
 
+async def test_timeout_is_not_retried_by_default():
+    import asyncio
+
+    calls = {"n": 0}
+
+    @tool(timeout=0.01, retries=3)
+    async def slow() -> str:
+        """Slow tool."""
+        calls["n"] += 1
+        await asyncio.sleep(1.0)
+        return "done"
+
+    out = await run_tool(slow, {}, sleep=_no_sleep)
+    # A timed-out sync tool may still be running; retrying could execute the
+    # side effect twice, so timeouts are terminal unless opted into retry_on.
+    assert calls["n"] == 1
+    assert json.loads(out)["error"]["category"] == "timeout"
+
+
+async def test_retry_on_replaces_defaults_so_it_can_narrow():
+    calls = {"n": 0}
+
+    @tool(retries=3, retry_on=(ValueError,))
+    def once() -> str:
+        """Non-idempotent tool that must not be retried on transient errors."""
+        calls["n"] += 1
+        raise TransientError("blip")
+
+    out = await run_tool(once, {}, sleep=_no_sleep)
+    assert calls["n"] == 1        # TransientError no longer in the retry set
+    assert json.loads(out)["error"]["category"] == "transient"
+
+
 async def test_validation_failure_returns_clean_error():
     def reject(_result):
         raise ValidationError("unexpected shape")
@@ -121,6 +196,61 @@ async def test_validation_failure_returns_clean_error():
     out = await run_tool(fetch, {}, sleep=_no_sleep)
     parsed = json.loads(out)
     assert parsed["error"]["category"] == "validation"
+
+
+async def test_check_style_validator_keeps_the_result():
+    def check(result):
+        assert "value" in result   # inspects, returns None
+
+    @tool(validate=check)
+    def fetch() -> str:
+        """Fetch raw data."""
+        return "real value"
+
+    out = await run_tool(fetch, {}, sleep=_no_sleep)
+    assert out == "real value"    # not replaced by the validator's None
+
+
+async def test_transform_style_validator_replaces_the_result():
+    @tool(validate=lambda r: r.strip())
+    def fetch() -> str:
+        """Fetch raw data."""
+        return "  padded  "
+
+    out = await run_tool(fetch, {}, sleep=_no_sleep)
+    assert out == "padded"
+
+
+async def test_raising_fallback_degrades_to_plain_failure():
+    def bad_fallback():
+        raise RuntimeError("cache down too")
+
+    @tool(fallback=bad_fallback)
+    def lookup() -> str:
+        """Look something up."""
+        raise PermanentError("backend down")
+
+    out = await run_tool(lookup, {}, sleep=_no_sleep)
+    parsed = json.loads(out)
+    assert parsed["ok"] is False
+    assert parsed["error"]["category"] == "permanent"
+    assert "degraded" not in parsed          # the fallback did not deliver
+    assert parsed["error"]["fallback_error"] == "cache down too"
+
+
+def test_harden_returns_a_copy_and_leaves_the_original_alone():
+    from drangue import harden
+
+    @tool
+    def shared() -> str:
+        """Shared between two agents."""
+        return "ok"
+
+    before = shared.policy
+    hardened = harden(shared, timeout=2.0, retries=3)
+    assert hardened is not shared
+    assert hardened.policy.retries == 3
+    assert shared.policy is before           # untouched
 
 
 async def test_fallback_is_returned_marked_degraded():

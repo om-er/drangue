@@ -9,9 +9,9 @@ from __future__ import annotations
 import inspect
 import types
 import typing as t
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from .hardening import ToolPolicy, _UNSET, make_policy
+from .hardening import DEFAULT_BACKOFF, ToolPolicy, _UNSET, make_policy
 
 _PY_TO_JSON = {
     str: "string",
@@ -89,7 +89,8 @@ class Tool:
 
 def tool(func: t.Callable | None = None, *, name: str | None = None,
          description: str | None = None, timeout: float | None = None,
-         retries: int = 0, backoff: float = 0.0, max_backoff: float = 30.0,
+         retries: int = 0, backoff: float = DEFAULT_BACKOFF,
+         max_backoff: float = 30.0,
          retry_on=None, validate=None, fallback=_UNSET,
          reversible: bool = True, requires_approval: bool = False):
     """Decorate a function to expose it as a tool.
@@ -104,11 +105,16 @@ def tool(func: t.Callable | None = None, *, name: str | None = None,
     description, unless you override them.
 
     Hardening options (Chapter 6), all optional:
-        timeout     seconds before the call is abandoned (a retryable timeout)
+        timeout     seconds before the call is abandoned (not retried by
+                    default: a timed-out sync tool may still be running)
         retries     extra attempts after the first, for transient failures
-        backoff     base seconds for exponential backoff between retries
-        retry_on    extra exception types to treat as transient
-        validate    a callable run on the result; raise ValidationError to reject
+        backoff     base seconds for jittered exponential backoff between retries
+        retry_on    exception types to treat as retryable; REPLACES the default
+                    set (drangue.hardening.DEFAULT_RETRY_ON), so it can narrow
+                    as well as widen what is retried
+        validate    a callable run on the result; raise ValidationError to
+                    reject, return a replacement to transform, or return None
+                    to keep the result as-is
         fallback    a value (or callable) returned, marked degraded, on failure
     """
 
@@ -158,10 +164,12 @@ def tool(func: t.Callable | None = None, *, name: str | None = None,
 
 
 def harden(obj, **policy_kwargs) -> Tool:
-    """Attach (or replace) a hardening policy on an existing tool or function.
+    """Return a copy of a tool (or function) with a hardening policy attached.
 
         flaky = harden(flaky, timeout=2.0, retries=3, backoff=0.5)
+
+    The original is left untouched, so hardening a tool shared by two agents
+    never silently changes the other agent's policy.
     """
     t_obj = obj if isinstance(obj, Tool) else tool(obj)
-    t_obj.policy = make_policy(**policy_kwargs)
-    return t_obj
+    return replace(t_obj, policy=make_policy(**policy_kwargs))
