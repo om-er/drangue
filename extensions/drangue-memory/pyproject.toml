@@ -9,7 +9,7 @@ description = "Long-term memory for drangue (the Memory seam): SQLite + embeddin
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = ["drangue>=0.1,<0.2"]
+dependencies = ["drangue>=0.2,<0.3"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
