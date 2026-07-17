@@ -17,6 +17,7 @@ from __future__ import annotations
 import time
 
 from .. import rollout
+from ..errors import ConflictError
 from ..events import Event, Result
 from ..hardening import _classify
 from ..memory import item_to_dict, live_items, render_context
@@ -30,6 +31,23 @@ def _compose_system(system: str, recalled: list) -> str:
     if not context:
         return system
     return f"{system}\n\n{context}" if system else context
+
+
+async def _append(store, run_id: str, event: Event, emit) -> bool:
+    """Append an event; False when another writer already claimed the seq.
+
+    A False return means our result LOST a write race (a concurrent resume, or
+    an approval landing mid-step). The store kept the winner; the caller's move
+    is to discard its own result, reload, and re-decide from the winner's log —
+    never to overwrite or crash.
+    """
+    try:
+        await store.append(run_id, event)
+    except ConflictError:
+        return False
+    if emit:
+        await emit(event)
+    return True
 
 
 class EventSourcedEngine:
@@ -66,24 +84,6 @@ class EventSourcedEngine:
                         "agent.resume(run_id) or start a new run_id."
                     )
 
-            # Input guardrail: a blocked input ends the run before any model
-            # work. This runs from the RECORDED input, so a resumed run that
-            # crashed before its first step is vetted too, not just fresh ones.
-            events = await store.load(run_id)
-            state = fold(events)
-            if state.model_calls == 0 and not state.finished:
-                reason = await executor.check_input(state.input)
-                if reason is not None:
-                    output = f"(blocked: {reason})"
-                    blocked = Event(seq=state.next_seq, type="run_finished",
-                                    payload={"output": output, "blocked": True})
-                    await store.append(run_id, blocked)
-                    if emit:
-                        await emit(blocked)
-                    events = events + [blocked]
-                    return Result(output=output, messages=state.messages,
-                                  events=events)
-
             while True:
                 events = await store.load(run_id)
                 state = fold(events)
@@ -110,12 +110,26 @@ class EventSourcedEngine:
                         payload["error"] = error
                     recalled = Event(seq=state.next_seq, type="memory_recalled",
                                      payload=payload)
-                    await store.append(run_id, recalled)
-                    if emit:
-                        await emit(recalled)
-                    continue
+                    await _append(store, run_id, recalled, emit)
+                    continue   # reload either way: our recall or the winner's
 
                 step = orchestrator.next(state)
+
+                # Input guardrail: vet the RECORDED input once, right before
+                # the first model step. Keying off the log (not the fresh-run
+                # branch) means a resumed run that crashed before its first
+                # step is vetted too.
+                if isinstance(step, ModelStep) and state.model_calls == 0:
+                    reason = await executor.check_input(state.input)
+                    if reason is not None:
+                        output = f"(blocked: {reason})"
+                        blocked = Event(seq=state.next_seq, type="run_finished",
+                                        payload={"output": output, "blocked": True})
+                        if not await _append(store, run_id, blocked, emit):
+                            continue
+                        run_span.set("output", output)
+                        return Result(output=output, messages=state.messages,
+                                      events=events + [blocked])
 
                 # Enforce the budget before an expensive (model) step, using the
                 # spend already recorded in the log. Finish gracefully instead of
@@ -138,9 +152,8 @@ class EventSourcedEngine:
                     if not any(e.type == "run_finished" for e in events):
                         finished = Event(seq=state.next_seq, type="run_finished",
                                          payload={"output": step.output})
-                        await store.append(run_id, finished)
-                        if emit:
-                            await emit(finished)
+                        if not await _append(store, run_id, finished, emit):
+                            continue   # a concurrent writer got there; re-decide
                         events = await store.load(run_id)
                     return Result(output=step.output, messages=state.messages, events=events)
 
@@ -175,13 +188,16 @@ class EventSourcedEngine:
                                            "error": str(exc) or type(exc).__name__,
                                            "category": _classify(exc),
                                        })
-                        await store.append(run_id, failed)
-                        if emit:
-                            await emit(failed)
+                        # Best-effort: if a concurrent writer claimed the seq,
+                        # the log already moved on; the original exception is
+                        # what matters.
+                        await _append(store, run_id, failed, emit)
                         raise
-                    await store.append(run_id, produced)
-                    if emit:
-                        await emit(produced)
+                    if not await _append(store, run_id, produced, emit):
+                        # Our step lost a write race (a concurrent resume of
+                        # this run_id). The winner's event is truth; discard
+                        # ours, reload, and continue from the recorded log.
+                        continue
 
     async def _apply_autonomy(self, step, autonomy, events, state, run_id, store,
                               run_span, emit):
@@ -194,10 +210,8 @@ class EventSourcedEngine:
                 "call_id": call.id, "name": call.name,
                 "content": rollout.shadow_result(call),
             })
-            await store.append(run_id, ev)
-            if emit:
-                await emit(ev)
-            return "handled", None
+            await _append(store, run_id, ev, emit)
+            return "handled", None   # conflict or not: reload and re-decide
 
         if mode == rollout.ASSISTED:
             decision, reason = rollout.approval_decision(events, call.id)
@@ -206,9 +220,7 @@ class EventSourcedEngine:
                     "call_id": call.id, "name": call.name,
                     "content": rollout.denied_result(call, reason),
                 })
-                await store.append(run_id, ev)
-                if emit:
-                    await emit(ev)
+                await _append(store, run_id, ev, emit)
                 return "handled", None
             if decision == "pending":
                 if not rollout.has_approval_request(events, call.id):
@@ -216,9 +228,8 @@ class EventSourcedEngine:
                         "call_id": call.id, "tool": call.name,
                         "arguments": call.arguments, **rollout.last_reasoning(events),
                     })
-                    await store.append(run_id, req)
-                    if emit:
-                        await emit(req)
+                    if not await _append(store, run_id, req, emit):
+                        return "handled", None   # raced; reload and re-decide
                 run_span.set("status", "paused")
                 events = await store.load(run_id)
                 return "paused", Result(output="(paused: awaiting approval)",

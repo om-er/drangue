@@ -20,7 +20,7 @@ import uuid
 from . import rollout
 from .context import RunContext
 from .engine import EventSourcedEngine
-from .errors import UnknownRunError
+from .errors import ConflictError, UnknownRunError
 from .events import Event, Result
 from .executor import Executor
 from .models import AnthropicModel
@@ -165,22 +165,32 @@ class Agent:
             )
         return call_id
 
+    async def _decide(self, run_id: str, call_id: str | None, type_: str,
+                      extra: dict) -> None:
+        # Recording a decision is read-modify-write on the log's next seq; a
+        # concurrent engine step can claim it first. On conflict, reload and
+        # retry at the new tail instead of losing the human's decision.
+        last: Exception | None = None
+        for _ in range(5):
+            events = await self.store.load(run_id)
+            cid = self._resolve_pending(events, call_id, run_id)
+            try:
+                await self.store.append(run_id, Event(
+                    seq=rollout.next_seq(events), type=type_,
+                    payload={"call_id": cid, **extra}))
+                return
+            except ConflictError as exc:
+                last = exc
+        raise last
+
     async def approve(self, run_id: str, call_id: str | None = None) -> None:
         """Approve a pending action. Defaults to the one pending approval."""
-        events = await self.store.load(run_id)
-        cid = self._resolve_pending(events, call_id, run_id)
-        await self.store.append(run_id, Event(
-            seq=rollout.next_seq(events), type="approval_granted",
-            payload={"call_id": cid}))
+        await self._decide(run_id, call_id, "approval_granted", {})
 
     async def reject(self, run_id: str, call_id: str | None = None,
                      reason: str = "") -> None:
         """Reject a pending action; the agent is told and continues."""
-        events = await self.store.load(run_id)
-        cid = self._resolve_pending(events, call_id, run_id)
-        await self.store.append(run_id, Event(
-            seq=rollout.next_seq(events), type="approval_denied",
-            payload={"call_id": cid, "reason": reason}))
+        await self._decide(run_id, call_id, "approval_denied", {"reason": reason})
 
     async def stream(self, input: str | None = None, *, run_id: str | None = None,
                      trace: bool = False) -> t.AsyncIterator[Event]:

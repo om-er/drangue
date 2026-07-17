@@ -102,6 +102,83 @@ async def test_side_effecting_tool_runs_exactly_once_across_resume():
     assert runs == ["r:2"]             # charged once, with the stable key for seq 2
 
 
+class RacingStore(InMemoryStore):
+    """Injects a competitor's event at a chosen seq just before our append,
+    simulating a second process resuming the same run concurrently."""
+
+    def __init__(self, race_at_type, competitor_payload):
+        super().__init__()
+        self.race_at_type = race_at_type
+        self.competitor_payload = competitor_payload
+        self.raced = False
+
+    async def append(self, run_id, event):
+        if not self.raced and event.type == self.race_at_type:
+            self.raced = True
+            from drangue.events import Event as Ev
+            await super().append(run_id, Ev(seq=event.seq, type=event.type,
+                                            payload=self.competitor_payload))
+        await super().append(run_id, event)
+
+
+async def test_a_lost_write_race_folds_the_winner_instead_of_crashing():
+    # Two engines on one run_id: the loser's tool_result must be discarded in
+    # favor of the recorded winner, and the run must complete from the
+    # winner's log — not crash, not overwrite.
+    store = RacingStore(
+        race_at_type="tool_result",
+        competitor_payload={"call_id": "c1", "name": "add", "content": "9"},
+    )
+    model = ScriptedModel([
+        ModelResponse(tool_calls=[ToolCall("c1", "add", {"a": 2, "b": 3})]),
+        ModelResponse(text="done"),
+    ])
+    result = await Agent(model=model, tools=[add], store=store).run("go", run_id="r-race")
+
+    assert result.output == "done"
+    tool_results = [e for e in result.events if e.type == "tool_result"]
+    assert len(tool_results) == 1
+    assert tool_results[0].payload["content"] == "9"   # the winner's fact, kept
+    # And the conversation the model saw was folded from the winner's log.
+    tool_msg = [m for m in result.messages if m.get("role") == "tool"][0]
+    assert tool_msg["content"] == "9"
+
+
+async def test_approval_survives_a_concurrent_seq_claim():
+    from drangue import Autonomy
+
+    ran = []
+
+    @tool
+    def act(x: int) -> str:
+        """Act."""
+        ran.append(x)
+        return "acted"
+
+    store = InMemoryStore()
+    model = ScriptedModel([
+        ModelResponse(tool_calls=[ToolCall("c1", "act", {"x": 1})]),
+        ModelResponse(text="done"),
+    ])
+    agent = Agent(model=model, tools=[act], store=store,
+                  autonomy=Autonomy(modes={"act": "assisted"}))
+    paused = await agent.run("go", run_id="r-appr")
+    assert paused.status == "paused"
+
+    # A competitor claims the seq approve() would use; approve must retry at
+    # the new tail rather than losing the human's decision.
+    from drangue import rollout as _r
+    from drangue.events import Event as Ev
+    events = await store.load("r-appr")
+    await store.append("r-appr", Ev(seq=_r.next_seq(events), type="memory_recalled",
+                                    payload={"items": [], "recalled_at": 0.0}))
+
+    await agent.approve("r-appr")
+    result = await agent.resume("r-appr")
+    assert result.output == "done"
+    assert ran == [1]
+
+
 async def test_a_crashed_step_is_recorded_as_run_failed():
     from drangue.events import Result
 
