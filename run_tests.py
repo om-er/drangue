@@ -7,24 +7,16 @@ are coroutines. Run with: python run_tests.py
 import asyncio
 import importlib
 import inspect
+import os
 import sys
 
-MODULES = [
-    "tests.test_agent",
-    "tests.test_openai_model",
-    "tests.test_engine",
-    "tests.test_observability",
-    "tests.test_durability",
-    "tests.test_hardening",
-    "tests.test_cost",
-    "tests.test_security",
-    "tests.test_rollout",
-    "tests.test_evals",
-    "tests.test_memory",
-    "tests.test_conformance",
-    "tests.test_integration",
-    "tests.test_distributed",
-]
+# Discovered, not listed: a new tests/test_*.py must never be silently skipped.
+_TESTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tests")
+MODULES = sorted(
+    f"tests.{fname[:-3]}"
+    for fname in os.listdir(_TESTS_DIR)
+    if fname.startswith("test_") and fname.endswith(".py")
+)
 
 
 def main() -> int:

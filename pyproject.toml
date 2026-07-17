@@ -23,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
 ]
 # The core has zero dependencies. Install the adapter you want:
 #   pip install "drangue[openai]"     covers OpenAI, DeepSeek, Groq, Ollama, ...
@@ -30,10 +31,11 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=0.40"]
-openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.40,<2"]
+openai = ["openai>=1.0,<3"]
 otel = ["opentelemetry-api>=1.20", "opentelemetry-sdk>=1.20"]
-dev = ["pytest>=7", "anthropic>=0.40", "openai>=1.0"]
+dev = ["pytest>=7", "anthropic>=0.40,<2", "openai>=1.0,<3",
+       "opentelemetry-api>=1.20", "opentelemetry-sdk>=1.20"]
 
 [project.urls]
 Homepage = "https://github.com/om-er/drangue"

@@ -34,6 +34,33 @@ jobs:
       - run: python run_tests.py
       - run: python extensions/run_tests.py
 
+  # The extensions' own claims are only real if CI installs their SDKs and
+  # runs their suites against real backing services.
+  extensions:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: drangue
+          POSTGRES_PASSWORD: drangue
+          POSTGRES_DB: drangue
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U drangue"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DRANGUE_POSTGRES_DSN: postgresql://drangue:drangue@localhost:5432/drangue
+      DRANGUE_TEMPORAL_TEST: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: pip install "psycopg[binary]>=3.1" "temporalio>=1.5"
+      - run: python extensions/run_tests.py
+
   examples:
     runs-on: ubuntu-latest
     steps:

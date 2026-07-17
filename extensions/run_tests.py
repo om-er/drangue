@@ -42,8 +42,17 @@ def main() -> int:
                 continue
             try:
                 module = _load(os.path.join(tests_dir, fname))
-            except Exception as exc:  # e.g. an optional SDK is not installed
-                print(f"SKIP {name}::{fname} (cannot import: {exc!r})")
+            except ModuleNotFoundError as exc:
+                # Only a missing OPTIONAL dependency (the extension's own SDK)
+                # is a legitimate skip. Anything else — including an import
+                # error inside the extension's own code — is a real failure;
+                # converting it to a skip would ship broken packages green.
+                print(f"SKIP {name}::{fname} (optional dependency missing: {exc.name})")
+                continue
+            except Exception as exc:
+                print(f"FAIL {name}::{fname} (import error: {exc!r})")
+                failures.append(f"{name}::{fname}")
+                total += 1
                 continue
             for attr in sorted(dir(module)):
                 if not attr.startswith("test_"):
