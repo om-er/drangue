@@ -159,8 +159,19 @@ class AnthropicModel(Model):
                     ToolCall(id=block.id, name=block.name, arguments=block.input)
                 )
 
+        # Anthropic reports cached tokens SEPARATELY from input_tokens, billed
+        # at different rates (writes 1.25x, reads 0.1x). Dropping them would
+        # hide the bulk of prompt spend from budgets on exactly the runs that
+        # enable cache=True. Usage keys are disjoint counts: input_tokens is
+        # uncached input only.
         u = getattr(resp, "usage", None)
-        usage = {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens} if u else None
+        usage = None
+        if u:
+            usage = {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}
+            for extra in ("cache_creation_input_tokens", "cache_read_input_tokens"):
+                v = getattr(u, extra, None)
+                if v:
+                    usage[extra] = v
 
         return ModelResponse(
             text="".join(text_parts),
@@ -290,8 +301,21 @@ class OpenAIModel(Model):
                 arguments=arguments,
             ))
 
+        # OpenAI's prompt_tokens INCLUDES cached tokens; split them out so the
+        # usage dict has the same invariant as the Anthropic adapter's — keys
+        # are disjoint counts, input_tokens is uncached input only.
         u = getattr(resp, "usage", None)
-        usage = {"input_tokens": u.prompt_tokens, "output_tokens": u.completion_tokens} if u else None
+        usage = None
+        if u:
+            details = getattr(u, "prompt_tokens_details", None)
+            cached = getattr(details, "cached_tokens", 0) if details else 0
+            cached = cached or 0
+            usage = {
+                "input_tokens": u.prompt_tokens - cached,
+                "output_tokens": u.completion_tokens,
+            }
+            if cached:
+                usage["cache_read_input_tokens"] = cached
 
         # NOTE: `reasoning` is deliberately left unset. The Chat Completions API
         # exposes no equivalent of Anthropic's thinking blocks, and inventing one

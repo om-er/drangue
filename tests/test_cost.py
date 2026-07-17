@@ -244,6 +244,31 @@ def test_cache_is_refused_where_it_would_be_silently_dropped():
             assert "cache=True only applies" in str(exc)
 
 
+async def test_anthropic_usage_captures_cache_tokens():
+    class FakeWithUsage:
+        def __init__(self):
+            self.messages = SimpleNamespace(create=self._create)
+
+        async def _create(self, **kwargs):
+            usage = SimpleNamespace(
+                input_tokens=50, output_tokens=10,
+                cache_creation_input_tokens=2000,
+                cache_read_input_tokens=18000,
+            )
+            return SimpleNamespace(content=[], usage=usage, stop_reason="end_turn")
+
+    model = AnthropicModel("claude-test", client=FakeWithUsage(), cache=True)
+    resp = await model.generate(system="rules",
+                                messages=[{"role": "user", "content": "hi"}],
+                                tools=[])
+    assert resp.usage == {
+        "input_tokens": 50,
+        "output_tokens": 10,
+        "cache_creation_input_tokens": 2000,
+        "cache_read_input_tokens": 18000,
+    }
+
+
 async def test_anthropic_does_not_send_an_idempotency_header():
     # Anthropic has no request idempotency key; the param is accepted for
     # interface parity but must not be sent (it would be a silent no-op).
